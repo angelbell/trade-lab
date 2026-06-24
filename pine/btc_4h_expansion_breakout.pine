@@ -1,0 +1,101 @@
+//@version=5
+// =============================================================================
+//  [BTC 4H]  Volatility-EXPANSION Donchian Breakout -- CONFIRMED-CLOSE entry, scale-out.
+//            4H chart. Enters Donchian breaks only during HIGH-volatility (expansion) regimes.
+//
+//  ロジック:
+//    拡散ゲート: ATR(14) の過去Lパーセンタイルが上位(既定 top25%)＝高ボラ局面のみ。
+//    ブレイク  : 終値 > Donchian High(30)[1]（ロング）/ 終値 < Donchian Low(30)[1]（ショート）。
+//    エントリ  : そのブレイク足の確定終値で約定（process_orders_on_close=true）。
+//    損切り    : entry ∓ 1×ATR。利確: スケールアウト（半分を rr1、残りを rr2 ランナー、ストップ固定）。
+//    時間切れ  : maxhold 本（既定60≒10日）で成行。同足両到達は損切り優先（保守）。
+//    サイズ    : 1トレード=資金の riskPct%、重複なし（1ポジずつ）。
+//
+//  運用上の注意 : ペーパー/live-forward 候補（確定ブックではない）。サイズは小さく、BTC族は合計≤parity、
+//                 ロング主体で開始。既定値はチューニングしない。1%リスク上限・実DDは1.5-2倍想定。
+// =============================================================================
+strategy("[BTC 4H] Volatility-Expansion Breakout (scale-out 2R/4R)",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,                 // ★ ブレイク足の確定終値で約定（仕様通り）
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.05,                 // 往復0.1%相当。0.05%×2。実値はもっと厳しめ想定で
+     pyramiding              = 0)
+
+// ----- inputs (既定値はチューニングしない) -----------------------------------
+atrLen   = input.int(14,    "ATR length", minval=1)
+rankLen  = input.int(120,   "ATR percentile lookback L", minval=10)
+expTopPct= input.float(25.0,"Expansion: ATR in TOP this %", step=5.0, minval=1.0, maxval=100.0)
+donLen   = input.int(30,    "Donchian length", minval=2)
+// スケールアウト: 半分を rr1 で利確 -> 残りを rr2 ランナー。ストップは初期(-1ATR)のまま固定。
+rr1      = input.float(2.0, "Scale-out: take partial at this R", step=0.5, minval=0.5)
+rr2      = input.float(4.0, "Scale-out: runner target R",        step=0.5, minval=1.0)
+partPct  = input.int(50,    "Scale-out: % closed at rr1", minval=1, maxval=99)
+maxHold  = input.int(60,    "Time stop (bars)", minval=1)
+riskPct  = input.float(1.0, "Risk per trade (% equity)", step=0.25, minval=0.0) / 100.0
+useLongs = input.bool(true,  "Trade longs")
+useShorts= input.bool(true,  "Trade shorts")
+
+// ----- indicators ------------------------------------------------------------
+atr      = ta.sma(ta.tr(true), atrLen)              // ATR = SMA of True Range
+atrRank  = ta.percentrank(atr, rankLen)             // 0-100: 高いほど現ATRが過去Lで大=ボラ拡散
+expOK    = atrRank[1] >= (100.0 - expTopPct)        // ★ 直前バーが上位 expTopPct% = 拡散（因果: [1]）
+
+donHi    = ta.highest(high, donLen)[1]              // 当バー除外（[1]）= ルックアヘッド無し
+donLo    = ta.lowest(low,  donLen)[1]
+
+flat     = strategy.position_size == 0
+longBreak  = expOK and close > donHi
+shortBreak = expOK and close < donLo
+
+// ----- state for stop/targets/time-stop --------------------------------------
+var float pStop  = na
+var float pT1    = na
+var float pT2    = na
+var int   entryBar = na
+
+// ---- entries (確定終値で約定 / 1ポジずつ) -----------------------------------
+if flat and useLongs and longBreak
+    risk = atr
+    if risk > 0
+        pStop := close - risk
+        pT1   := close + rr1 * risk
+        pT2   := close + rr2 * risk
+        entryBar := bar_index
+        qty = (strategy.equity * riskPct) / risk
+        strategy.entry("L", strategy.long, qty = qty)
+
+if flat and useShorts and shortBreak and not (useLongs and longBreak)
+    risk = atr
+    if risk > 0
+        pStop := close + risk
+        pT1   := close - rr1 * risk
+        pT2   := close - rr2 * risk
+        entryBar := bar_index
+        qty = (strategy.equity * riskPct) / risk
+        strategy.entry("S", strategy.short, qty = qty)
+
+// ---- exits: スケールアウト（半分を rr1 / 残りを rr2、ストップ共通=初期-1ATR） ---
+//   同足で stop と T1/T2 が両到達 = 損切り優先(保守)。BE移動はしない(noBE=検証で最良)。
+if strategy.position_size > 0
+    strategy.exit("L1", "L", qty_percent = partPct, stop = pStop, limit = pT1)
+    strategy.exit("L2", "L", stop = pStop, limit = pT2)
+if strategy.position_size < 0
+    strategy.exit("S1", "S", qty_percent = partPct, stop = pStop, limit = pT1)
+    strategy.exit("S2", "S", stop = pStop, limit = pT2)
+// 時間切れ: maxHold 本経過で成行（stop/limit 未到達時のみ機能）
+if strategy.position_size != 0 and not na(entryBar) and (bar_index - entryBar) >= maxHold
+    strategy.close_all(comment = "time")
+
+// ----- plots / markers -------------------------------------------------------
+plot(donHi, "Donchian High", color = color.new(color.teal, 40), linewidth = 1)
+plot(donLo, "Donchian Low",  color = color.new(color.maroon, 40), linewidth = 1)
+// 拡散(高ボラ)局面を薄く塗る = エントリーが許可される地合い
+bgcolor(expOK ? color.new(color.orange, 88) : na, title = "Expansion regime (high ATR)")
+plotshape(flat and useLongs and longBreak,  "Long break",  shape.triangleup,   location.belowbar,
+     color = color.new(color.green, 0), size = size.tiny)
+plotshape(flat and useShorts and shortBreak and not (useLongs and longBreak), "Short break",
+     shape.triangledown, location.abovebar, color = color.new(color.red, 0), size = size.tiny)

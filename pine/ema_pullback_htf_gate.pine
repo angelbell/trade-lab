@@ -1,0 +1,199 @@
+//@version=5
+// =============================================================================
+//  EMA Pullback Continuation — with configurable HTF Gate
+//  ---------------------------------------------------------------------------
+//  ema_pullback.py の Pine 移植版（マルチ TF 対応版）。
+//  チャート足で EMA 押し目エントリー。上位足ゲートを ON にすると
+//  指定した時間足 × ゲート種別（EMAスロープ / SMAスロープ / KAMA上昇）で
+//  フィルタをかける。
+//
+//  使い方:
+//    1. チャートの足種 = エントリー足（15m / 1H / 4H）
+//    2. HTF Gate ON をチェックして Gate TF / Type / Period を調整
+//    3. 開発中は「戦略」で数値確認、決まったら alert() を本番用に差し替え
+//
+//  ゲート設計:
+//    EMA/SMA slope : HTF EMA/SMA が前足より上 → ロング許可 / 下 → ショート許可
+//    KAMA rising   : KAMA(ER-adaptive) が前足より上 → ロング許可 / 下 → ショート許可
+//    ロング許可 = 上昇局面のみ参戦 → 不確実な横ばいを除外
+// =============================================================================
+strategy("[EMA Pullback] HTF Gate",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.02)
+
+// ============================================================
+// INPUTS — Entry
+// ============================================================
+grp1 = "Entry (chart TF)"
+emaFastLen = input.int(20,   "Fast MA length",           group=grp1, minval=1)
+emaSlowLen = input.int(80,   "Slow MA (trend) length",   group=grp1, minval=1)
+fastType   = input.string("EMA", "Fast MA type",         group=grp1, options=["EMA","SMA"])
+trendType  = input.string("SMA", "Trend MA type",        group=grp1, options=["EMA","SMA"])
+slopeK     = input.int(6,    "Slope lookback (bars)",    group=grp1, minval=1)
+atrLen     = input.int(14,   "ATR length",               group=grp1, minval=1)
+rr         = input.float(3.0,"Reward : Risk",            group=grp1, step=0.5, minval=0.5)
+minStopATR = input.float(0.5,"Min stop distance (ATR)",  group=grp1, step=0.1, minval=0.0)
+riskPct    = input.float(1.0,"Risk per trade (% equity)",group=grp1, step=0.25, minval=0.0) / 100.0
+useLongs   = input.bool(true,  "Trade longs",  group=grp1)
+useShorts  = input.bool(false, "Trade shorts", group=grp1)
+
+// ============================================================
+// INPUTS — HTF Gate
+// ============================================================
+grp2 = "HTF Gate"
+gateEnable = input.bool(false,        "HTF Gate ON",   group=grp2)
+gateTF     = input.timeframe("D",     "Gate TF",       group=grp2)
+gateType   = input.string("KAMA rising", "Gate type",  group=grp2,
+                 options=["EMA slope", "SMA slope", "KAMA rising"])
+gateN      = input.int(14, "Gate MA period", group=grp2, minval=2)
+
+// ============================================================
+// INDICATORS — entry TF
+// ============================================================
+f_ma(src, len, isSMA) => isSMA ? ta.sma(src, len) : ta.ema(src, len)
+
+ef = f_ma(close, emaFastLen, fastType  == "SMA")
+es = f_ma(close, emaSlowLen, trendType == "SMA")
+atr = ta.atr(atrLen)
+
+upTrend = es > es[slopeK]
+dnTrend = es < es[slopeK]
+
+// ============================================================
+// HTF GATE
+// ============================================================
+
+// KAMA (Kaufman Adaptive MA) — self-contained, safe to call on any series
+f_kama(src, length) =>
+    change_ = math.abs(ta.change(src, length))
+    path_   = math.sum(math.abs(ta.change(src, 1)), length)
+    er_     = path_ != 0.0 ? change_ / path_ : 0.0
+    fsc_ = 2.0 / (2.0 + 1.0)    // fast=2
+    ssc_ = 2.0 / (30.0 + 1.0)   // slow=30
+    sc_  = math.pow(er_ * (fsc_ - ssc_) + ssc_, 2.0)
+    var float k_ = na
+    k_ := na(k_[1]) ? src : k_[1] + sc_ * (src - k_[1])
+    k_
+
+// HTF close (no lookahead — uses confirmed completed HTF bar)
+htfClose = request.security(syminfo.tickerid, gateTF, close,
+               lookahead = barmerge.lookahead_off)
+
+// Compute gate indicator on the HTF series
+htfVal = switch gateType
+    "EMA slope"   => ta.ema(htfClose, gateN)
+    "SMA slope"   => ta.sma(htfClose, gateN)
+    "KAMA rising" => f_kama(htfClose, gateN)
+    => ta.ema(htfClose, gateN)
+
+htfRising = htfVal > htfVal[1]
+htfFalling = htfVal < htfVal[1]
+
+// Gate signal: allow long / short only when gate agrees
+gateUp = not gateEnable or htfRising
+gateDn = not gateEnable or htfFalling
+
+// ============================================================
+// PULLBACK STATE MACHINE
+// ============================================================
+var int   lState = 0
+var float lExt   = na
+var float lStop  = na
+var float lTgt   = na
+var int   sState = 0
+var float sExt   = na
+var float sStop  = na
+var float sTgt   = na
+
+if not upTrend
+    lState := 0
+    lExt   := na
+if not dnTrend
+    sState := 0
+    sExt   := na
+
+flat = strategy.position_size == 0
+
+// ---- LONG -------------------------------------------------------------------
+if upTrend and gateUp
+    if close < ef
+        lState := 1
+        lExt   := na(lExt) ? low : math.min(lExt, low)
+    else if lState == 1 and flat and useLongs
+        sR = math.min(lExt, low)
+        sP = (close - sR) < minStopATR * atr ? close - minStopATR * atr : sR
+        r  = close - sP
+        if r > 0
+            lStop := sP
+            lTgt  := close + rr * r
+            qty = (strategy.equity * riskPct) / r
+            strategy.entry("L", strategy.long, qty=qty,
+                 comment=str.format("G:{0}/{1}({2})", gateEnable ? gateTF : "off", gateType, gateN))
+        lState := 0
+        lExt   := na
+else if not (upTrend and gateUp)
+    lState := 0
+    lExt   := na
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop=lStop, limit=lTgt)
+
+// ---- SHORT ------------------------------------------------------------------
+if dnTrend and gateDn
+    if close > ef
+        sState := 1
+        sExt   := na(sExt) ? high : math.max(sExt, high)
+    else if sState == 1 and flat and useShorts
+        sR = math.max(sExt, high)
+        sP = (sR - close) < minStopATR * atr ? close + minStopATR * atr : sR
+        r  = sP - close
+        if r > 0
+            sStop := sP
+            sTgt  := close - rr * r
+            qty = (strategy.equity * riskPct) / r
+            strategy.entry("S", strategy.short, qty=qty,
+                 comment=str.format("G:{0}/{1}({2})", gateEnable ? gateTF : "off", gateType, gateN))
+        sState := 0
+        sExt   := na
+else if not (dnTrend and gateDn)
+    sState := 0
+    sExt   := na
+
+if strategy.position_size < 0
+    strategy.exit("S-exit", "S", stop=sStop, limit=sTgt)
+
+// ============================================================
+// PLOTS
+// ============================================================
+plot(ef, "Fast MA",  color=color.new(color.orange, 0), linewidth=1)
+plot(es, "Trend MA", color=color.new(color.blue,   0), linewidth=2)
+
+// HTF gate indicator (scaled to price context — shown as step-line)
+plot(gateEnable ? htfVal : na, "HTF Gate MA",
+     color=htfRising ? color.new(color.teal, 20) : color.new(color.red, 20),
+     linewidth=2, style=plot.style_stepline)
+
+// Trend + gate background
+trendCol = upTrend and gateUp ? color.new(color.green, 90) :
+           dnTrend and gateDn ? color.new(color.red,   90) :
+           color.new(color.gray, 95)
+bgcolor(trendCol, title="Trend + Gate regime")
+
+// Alert (fires on confirmed-close bar; entry happens next bar open)
+if lState[1] == 1 and close > ef and upTrend and gateUp and flat
+    alert(str.format("EMA Pullback LONG  {0} {1} | Gate:{2}/{3}({4}) | SL:{5,number,#.##} TP:{6,number,#.##}",
+         syminfo.ticker, timeframe.period,
+         gateEnable ? gateTF : "off", gateType, gateN,
+         lStop, lTgt), alert.freq_once_per_bar_close)
+
+if sState[1] == 1 and close < ef and dnTrend and gateDn and flat
+    alert(str.format("EMA Pullback SHORT {0} {1} | Gate:{2}/{3}({4}) | SL:{5,number,#.##} TP:{6,number,#.##}",
+         syminfo.ticker, timeframe.period,
+         gateEnable ? gateTF : "off", gateType, gateN,
+         sStop, sTgt), alert.freq_once_per_bar_close)

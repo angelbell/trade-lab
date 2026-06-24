@@ -1,0 +1,244 @@
+//@version=5
+// =============================================================================
+//  Wave-3 EMA戦略 (4h)  —  GC→初回20EMA押し→基準足実体抜け / 戻り高値・直近高値で利確
+//  research/wave3_lab.py の Pine 移植（検証用ストラテジー）。
+//  ---------------------------------------------------------------------------
+//  エントリー（ロング。ショートはミラー）:
+//   1. GC: 20EMA が 200EMA を上抜け → 「初回押し待ち」
+//   2. 初回押し: クロス後、20EMA にタッチした最初の足=「基準足」, その高値=トリガー
+//   3. エントリー: 後続足が基準足高値を【終値】で上抜け → ★一発勝負（最初のブレイクで判定）
+//      → RR≥1 & 目標ありなら次足始値で約定。無効ならこのクロスは見送り（次GCまで再挑戦しない）
+//      ※旧版は無効ブレイク後に同じ基準足で再挑戦し続け→遅れて高値掴みしていたのを修正
+//   4. 抜け前に 200EMA とデッドクロス → 見送り
+//  利確: T1=戻り高値(最寄り上値,半利50%) → 半利後BE → T2=直近高値(全利)。RR<1 or 目標無し=見送り。
+//  損切り: 直近安値=entryより下の最新ピボット安値（risk下限=0.5ATR）。
+//  描画: 緑ボックス=利確ゾーン(entry→T2), 赤ボックス=損切ゾーン(entry→stop), touch足/L足マーカー。
+//  ★注意: このエントリー単体に検証された優位性は無い（≒ベータ）。裁量補助／可視化用。
+// =============================================================================
+strategy("[Wave-3 EMA 4H] 戻り高値/直近高値 利確版",
+     overlay=true, initial_capital=10000, max_boxes_count=500,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     calc_on_every_tick=false, process_orders_on_close=false,
+     commission_type=strategy.commission.percent, commission_value=0.02)
+
+// ----- inputs ----------------------------------------------------------------
+emaFastLen = input.int(20,  "Fast EMA", minval=1)
+emaSlowLen = input.int(200, "Slow EMA", minval=1)
+pivotLeft  = input.int(5,   "ピボット left（目立ち度）",  minval=1)
+pivotRight = input.int(5,   "ピボット right（確定遅延）", minval=1)
+minRR      = input.float(1.0,"RR≥ これ未満は見送り（T1基準）", step=0.25, minval=0.0)
+rrFallback = input.float(2.0,"目標が無い時のRRフォールバック（0=見送り）", step=0.5, minval=0.0)
+riskFloor  = input.float(0.5,"risk下限 (ATR)", step=0.1, minval=0.0)
+atrLen     = input.int(14,  "ATR length", minval=1)
+useLongs   = input.bool(true,  "ロング")
+useShorts  = input.bool(true,  "ショート（ミラー）")
+maxStore   = input.int(60,  "ピボット保持数", minval=10)
+
+// ----- indicators ------------------------------------------------------------
+emaF = ta.ema(close, emaFastLen)
+emaS = ta.ema(close, emaSlowLen)
+atr  = ta.atr(atrLen)
+gc = ta.crossover(emaF, emaS)
+dc = ta.crossunder(emaF, emaS)
+
+// ----- ピボット → 配列（確定済みのみ蓄積）------------------------------------
+ph = ta.pivothigh(high, pivotLeft, pivotRight)
+pl = ta.pivotlow(low,  pivotLeft, pivotRight)
+var float[] swH = array.new_float()
+var float[] swL = array.new_float()
+if not na(ph)
+    array.push(swH, ph)
+    if array.size(swH) > maxStore
+        array.shift(swH)
+if not na(pl)
+    array.push(swL, pl)
+    if array.size(swL) > maxStore
+        array.shift(swL)
+
+f_minAbove(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v > px
+            r := na(r) ? v : math.min(r, v)
+    r
+f_recentBelow(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v < px
+            r := v
+    r
+f_maxBelow(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v < px
+            r := na(r) ? v : math.max(r, v)
+    r
+f_recentAbove(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v > px
+            r := v
+    r
+
+// =============================================================================
+//  LONG
+// =============================================================================
+var int   modeL = 0
+var float trigHiL = na
+var float L_e = na
+var float L_stop = na
+var float L_t1 = na
+var float L_t2 = na
+var bool  L_t1hit = false
+var box   L_gBox = na
+var box   L_rBox = na
+bool touchL = false
+bool enterL = false
+
+if gc
+    modeL := 1
+    trigHiL := na
+else if dc
+    modeL := 0
+    trigHiL := na
+
+if modeL == 1 and not gc and low <= emaF
+    trigHiL := high                 // 基準足
+    modeL := 2
+    touchL := true
+else if modeL == 2 and close > trigHiL
+    modeL := 0                      // ★一発勝負：このクロスは消費（成否問わず）
+    trigHiL := na
+    if strategy.position_size == 0 and useLongs
+        e = close
+        stop = f_recentBelow(swL, e)
+        if not na(stop)
+            if e - stop < riskFloor * atr
+                stop := e - riskFloor * atr
+            risk = e - stop
+            // 目標: 上に目立つ過去高値があればそれ、無ければRRフォールバック
+            float t1 = f_minAbove(swH, e)
+            float t2 = na
+            bool valid = false
+            if not na(t1) and risk > 0 and (t1 - e) / risk >= minRR
+                t2 := f_minAbove(swH, t1)
+                t2 := na(t2) ? t1 : t2
+                valid := true
+            else if rrFallback > 0 and risk > 0
+                t1 := e + rrFallback * risk
+                t2 := e + (rrFallback + 1.0) * risk
+                valid := true
+            if valid
+                L_e := e
+                L_stop := stop
+                L_t1 := t1
+                L_t2 := na(t2) ? t1 : t2
+                L_t1hit := false
+                enterL := true
+                qty = (strategy.equity * 0.10) / risk
+                strategy.entry("L", strategy.long, qty=qty)
+                L_gBox := box.new(bar_index, L_t2, bar_index, L_e,
+                     border_color=color.new(color.green,40), bgcolor=color.new(color.green,82))
+                L_rBox := box.new(bar_index, L_e, bar_index, L_stop,
+                     border_color=color.new(color.red,40), bgcolor=color.new(color.red,82))
+
+if strategy.position_size > 0
+    if high >= L_t1
+        L_t1hit := true
+    if not na(L_gBox)
+        box.set_right(L_gBox, bar_index)
+        box.set_right(L_rBox, bar_index)
+    strategy.exit("L-half", "L", qty_percent=50, stop=L_stop, limit=L_t1)
+    remStop = L_t1hit ? L_e : L_stop
+    strategy.exit("L-rem", "L", stop=remStop, limit=L_t2)
+
+// =============================================================================
+//  SHORT（ミラー）
+// =============================================================================
+var int   modeS = 0
+var float trigLoS = na
+var float S_e = na
+var float S_stop = na
+var float S_t1 = na
+var float S_t2 = na
+var bool  S_t1hit = false
+var box   S_gBox = na
+var box   S_rBox = na
+bool touchS = false
+bool enterS = false
+
+if dc
+    modeS := 1
+    trigLoS := na
+else if gc
+    modeS := 0
+    trigLoS := na
+
+if modeS == 1 and not dc and high >= emaF
+    trigLoS := low
+    modeS := 2
+    touchS := true
+else if modeS == 2 and close < trigLoS
+    modeS := 0
+    trigLoS := na
+    if strategy.position_size == 0 and useShorts
+        e = close
+        stop = f_recentAbove(swH, e)
+        if not na(stop)
+            if stop - e < riskFloor * atr
+                stop := e + riskFloor * atr
+            risk = stop - e
+            float t1 = f_maxBelow(swL, e)
+            float t2 = na
+            bool valid = false
+            if not na(t1) and risk > 0 and (e - t1) / risk >= minRR
+                t2 := f_maxBelow(swL, t1)
+                t2 := na(t2) ? t1 : t2
+                valid := true
+            else if rrFallback > 0 and risk > 0
+                t1 := e - rrFallback * risk
+                t2 := e - (rrFallback + 1.0) * risk
+                valid := true
+            if valid
+                S_e := e
+                S_stop := stop
+                S_t1 := t1
+                S_t2 := na(t2) ? t1 : t2
+                S_t1hit := false
+                enterS := true
+                qty = (strategy.equity * 0.10) / risk
+                strategy.entry("S", strategy.short, qty=qty)
+                S_gBox := box.new(bar_index, S_e, bar_index, S_t2,
+                     border_color=color.new(color.green,40), bgcolor=color.new(color.green,82))
+                S_rBox := box.new(bar_index, S_stop, bar_index, S_e,
+                     border_color=color.new(color.red,40), bgcolor=color.new(color.red,82))
+
+if strategy.position_size < 0
+    if low <= S_t1
+        S_t1hit := true
+    if not na(S_gBox)
+        box.set_right(S_gBox, bar_index)
+        box.set_right(S_rBox, bar_index)
+    strategy.exit("S-half", "S", qty_percent=50, stop=S_stop, limit=S_t1)
+    remStop = S_t1hit ? S_e : S_stop
+    strategy.exit("S-rem", "S", stop=remStop, limit=S_t2)
+
+// =============================================================================
+//  可視化
+// =============================================================================
+plot(emaF, "20EMA", color=color.new(color.orange, 0), linewidth=2)
+plot(emaS, "200EMA", color=color.new(color.blue, 0), linewidth=2)
+plotshape(gc, "GC", shape.triangleup, location.belowbar, color.new(color.green,0), size=size.tiny)
+plotshape(dc, "DC", shape.triangledown, location.abovebar, color.new(color.red,0), size=size.tiny)
+// touch足（基準足）と エントリー足を明確にマーク
+plotshape(touchL, "touch(L)", shape.circle, location.belowbar, color.new(color.white,0), size=size.tiny, text="touch")
+plotshape(touchS, "touch(S)", shape.circle, location.abovebar, color.new(color.white,0), size=size.tiny, text="touch")
+plotshape(enterL, "Long", shape.labelup,   location.belowbar, color.new(color.green,0), size=size.small, text="LONG", textcolor=color.white)
+plotshape(enterS, "Short", shape.labeldown,location.abovebar, color.new(color.red,0),   size=size.small, text="SHORT", textcolor=color.white)
+// 抜け待ちトリガー線
+plot(modeL==2 ? trigHiL : na, "Lトリガー", color=color.new(color.green,0), linewidth=1, style=plot.style_linebr)
+plot(modeS==2 ? trigLoS : na, "Sトリガー", color=color.new(color.red,0),   linewidth=1, style=plot.style_linebr)

@@ -1,0 +1,133 @@
+//@version=5
+// =============================================================================
+//  [BTC 4H]  EMA Pullback Continuation (20/80, RR 1:3) -- CONFIRMED-CLOSE entry.
+//            4H chart, long-only.  Trend MA = SMA (BTC default).
+//
+//  ロジック:
+//    トレンド : 80MA の傾き（slopeK 本前比）。上向き=ロング、下向き=ショート、横=見送り。
+//    押し目   : ロング地合いで価格が 20EMA を終値で下抜け＝押し目。安値の極値を記録。
+//    エントリ : 押し目後、足が 20EMA を「終値で」抜け返して確定→次足始値で約定（だましヒゲ回避）。
+//    損切り   : 押し目の極値（狭ければ ATR で床固め）。利確: 損切り幅 × RR（既定 1:3）。
+//    サイズ   : 1トレード = 資金の riskPct%。
+//    サイクル位相ゲート: 価格が週足30週MAから +maxExt% 超で上の成熟強気チョップ期は見送り、
+//                       回復初期〜中盤のみロング（"水準"ゲート、既定ON）。
+//
+//  no-lookahead: 確認足の終値→次足始値で約定。
+//  運用上の注意 : 1%リスク上限・実DDは1.5-2倍想定。BTC買いswap(~-35%/yr)は別途考慮。4H に適用。
+// =============================================================================
+strategy("[BTC 4H] EMA Pullback Continuation 80/21 RR1:3",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1,
+     calc_on_every_tick = false,
+     process_orders_on_close = false,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.02)
+
+// ----- inputs ----------------------------------------------------------------
+emaFastLen = input.int(20,  "Fast MA (pullback)", minval=1)
+emaSlowLen = input.int(80,  "Slow MA (trend)",    minval=1)
+fastType   = input.string("EMA", "Fast MA type",  options=["EMA", "SMA"])
+trendType  = input.string("SMA", "Trend MA type", options=["EMA", "SMA"])  // BTC default = SMA
+slopeK     = input.int(6,   "Trend slope lookback (bars)", minval=1)
+atrLen     = input.int(14,  "ATR length",          minval=1)
+rr         = input.float(3.0, "Reward : Risk",     step=0.5, minval=0.5)
+minStopATR = input.float(0.5, "Min stop distance (ATR)", step=0.1, minval=0.0)
+riskPct    = input.float(1.0, "Risk per trade (% equity)", step=0.25, minval=0.0) / 100.0
+useLongs   = input.bool(true,  "Trade longs")
+useShorts  = input.bool(false, "Trade shorts")   // BTC: long-only by default
+
+// サイクル位相ゲート: 価格が週足MAの"水準"より上に伸びきった局面を見送る（"傾き"でなく"水準"）。
+useCycleGate = input.bool(true,  "Cycle-phase gate ON (weekly 30MA level)")
+cycleLen     = input.int(30,     "  Cycle: weekly MA length (default 30)", minval=5)
+maxExtPct    = input.float(10.0, "  Cycle: skip if > this % above weekly MA", step=2.5) / 100.0
+
+// ----- indicators ------------------------------------------------------------
+// EMA/SMA を入力で切替（両方計算して選択 = ta.* を毎足評価して安全）
+f_ma(src, length, isSMA) =>
+    isSMA ? ta.sma(src, length) : ta.ema(src, length)
+
+ef  = f_ma(close, emaFastLen, fastType  == "SMA")   // 押し目/エントリー基準（既定 21EMA）
+es  = f_ma(close, emaSlowLen, trendType == "SMA")   // トレンド基準（既定 80EMA）
+atr = ta.atr(atrLen)
+
+upTrend = es > es[slopeK]                 // 80EMA が slopeK 本で上向き
+dnTrend = es < es[slopeK]                 // 同 下向き
+
+// 週足30週SMA（因果的: lookahead_off で確定済みHTF値のみ参照）
+wSMA    = request.security(syminfo.tickerid, "1W", ta.sma(close, cycleLen), lookahead = barmerge.lookahead_off)
+cycleOK = not useCycleGate or (not na(wSMA) and close <= (1.0 + maxExtPct) * wSMA)  // 上方乖離が小さい局面のみ
+
+flat = strategy.position_size == 0
+
+// ----- pullback state machine ------------------------------------------------
+var int   lState = 0     // 1 = ロング押し目進行中（終値での奪還確定を待つ）
+var float lExt   = na    // 押し目中の最安値
+var float lStop  = na
+var float lTgt   = na
+var int   sState = 0
+var float sExt   = na     // 戻り中の最高値
+var float sStop  = na
+var float sTgt   = na
+
+// トレンドが消えたら押し目状態をリセット
+if not upTrend
+    lState := 0
+    lExt   := na
+if not dnTrend
+    sState := 0
+    sExt   := na
+
+// ---- LONG -------------------------------------------------------------------
+if upTrend
+    if close < ef
+        // 押し目継続: 極値を更新
+        lState := 1
+        lExt   := na(lExt) ? low : math.min(lExt, low)
+    else if lState == 1 and flat and useLongs and cycleOK
+        // ★確認: 足が 20EMA を終値で抜け返した -> 次足始値でエントリー（サイクルゲート通過時のみ）
+        sR = math.min(lExt, low)
+        sP = (close - sR) < minStopATR * atr ? close - minStopATR * atr : sR
+        r  = close - sP
+        if r > 0
+            lStop := sP
+            lTgt  := close + rr * r
+            qty = (strategy.equity * riskPct) / r
+            strategy.entry("L", strategy.long, qty = qty)
+        lState := 0
+        lExt   := na
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop = lStop, limit = lTgt)
+
+// ---- SHORT (mirror) ---------------------------------------------------------
+if dnTrend
+    if close > ef
+        sState := 1
+        sExt   := na(sExt) ? high : math.max(sExt, high)
+    else if sState == 1 and flat and useShorts
+        sR = math.max(sExt, high)
+        sP = (sR - close) < minStopATR * atr ? close + minStopATR * atr : sR
+        r  = sP - close
+        if r > 0
+            sStop := sP
+            sTgt  := close - rr * r
+            qty = (strategy.equity * riskPct) / r
+            strategy.entry("S", strategy.short, qty = qty)
+        sState := 0
+        sExt   := na
+
+if strategy.position_size < 0
+    strategy.exit("S-exit", "S", stop = sStop, limit = sTgt)
+
+// ----- plots -----------------------------------------------------------------
+plot(ef, "Fast MA",  color = color.new(color.orange, 0), linewidth = 1)
+plot(es, "Trend MA", color = color.new(color.blue,   0), linewidth = 2)
+// 週足ゲートの上限ライン（このライン超え＝伸びきり＝ロング見送り）
+plot(useCycleGate ? (1.0 + maxExtPct) * wSMA : na, "Cycle gate ceiling",
+     color = color.new(color.purple, 30), linewidth = 1, style = plot.style_stepline)
+bgcolor(upTrend ? color.new(color.green, 92) : dnTrend ? color.new(color.red, 92) : na,
+     title = "Trend regime")
+// サイクルゲートで弾かれている(伸びきり)局面を薄く塗る
+bgcolor(useCycleGate and not cycleOK ? color.new(color.purple, 90) : na, title = "Cycle gate OFF (stretched)")

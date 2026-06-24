@@ -1,0 +1,146 @@
+//@version=5
+// =====================================================================
+//  structure_sma — market-structure breakout gated by daily SMA regime
+//  Port of the Python WFO/holdout-validated strategy.
+//  RUN THIS ON THE 1H CHART of BTCUSD (or BTC/USDT).
+//
+//  Logic:
+//    - 4H structure: fractal swing highs/lows (pivots, N bars each side).
+//        higher-low (swing low rising) => uptrend; lower-high => downtrend.
+//    - Entry (breakout): LONG when uptrend AND price breaks the last 4H swing
+//        high, ONLY if the daily close > daily SMA(150). SHORT is the mirror.
+//    - Exit: structure flips against us OR the protective swing level breaks,
+//        PLUS a hard 2*ATR(14) stop.
+//    - Sizing: risk 1% of equity per trade (stop distance = 2*ATR).
+//
+//  Validated (Python): WFO 2022-25 median OOS PF 1.58; holdout 2025-26
+//  (BTC -33%, DD -53%) -> strategy +6% (base), MaxDD -20%. Trend-follow
+//  profile: ~34% win rate, payoff 3.6, lose small often / win big rarely.
+// =====================================================================
+// process_orders_on_close=true => fill at the SIGNAL bar's CLOSE, like vectorbt.
+// Default Pine fills at the NEXT bar's OPEN, which for a breakout means buying
+// after the move already happened (a worse fill) — that alone craters the win
+// rate vs the Python backtest. This aligns the two.
+strategy("structure_sma (1H/4H/SMA150)", overlay=true,
+     default_qty_type=strategy.fixed, initial_capital=10000,
+     commission_type=strategy.commission.percent, commission_value=0.1,
+     slippage=0, calc_on_every_tick=false, pyramiding=0,
+     process_orders_on_close=true)
+
+// ---------------- inputs ----------------
+fractal_n  = input.int(3,    "Fractal N (bars each side)", minval=1)
+htf        = input.timeframe("240", "Structure timeframe (4H)")
+regimeTf   = input.timeframe("D",   "Regime timeframe (daily)")
+smaLen     = input.int(150,  "Regime SMA length")
+atrLen     = input.int(14,   "ATR length")
+atrMultSl  = input.float(2.0,"ATR stop multiplier", step=0.5)
+riskPct    = input.float(1.0,"Risk % of equity per trade", step=0.25) / 100.0
+useShorts  = input.bool(true,"Allow shorts")
+
+// ------------- 4H market structure (confirmed pivots, no repaint) -------------
+// Computed on the HTF; pivots confirm only after `fractal_n` closed bars, so
+// requesting with lookahead_off is leak-free (mirrors Python shift(n)+ffill).
+f_struct() =>
+    ph = ta.pivothigh(high, fractal_n, fractal_n)
+    pl = ta.pivotlow(low,  fractal_n, fractal_n)
+    var float lastSh = na
+    var float prevSh = na
+    var float lastSl = na
+    var float prevSl = na
+    if not na(ph)
+        prevSh := lastSh
+        lastSh := ph
+    if not na(pl)
+        prevSl := lastSl
+        lastSl := pl
+    [lastSh, prevSh, lastSl, prevSl]
+
+[sh, psh, sl, psl] = request.security(syminfo.tickerid, htf, f_struct(),
+     lookahead=barmerge.lookahead_off)
+
+uptrend   = not na(sl) and not na(psl) and sl > psl   // higher lows
+downtrend = not na(sh) and not na(psh) and sh < psh   // lower highs
+
+// ------------- daily SMA(150) regime gate (previous closed day) -------------
+// Canonical no-repaint idiom: offset the expression by [1] AND use lookahead_on
+// so we read the PREVIOUS CLOSED daily value with no future leak (mirrors the
+// Python .shift(1) on daily). Using [1] with lookahead_off would double-delay
+// it by an extra day. (The 4H structure below stays offset 0 + lookahead_off —
+// adding lookahead_on there WOULD leak the future, so only the regime changes.)
+dClose = request.security(syminfo.tickerid, regimeTf, close[1], lookahead=barmerge.lookahead_on)
+dSma   = request.security(syminfo.tickerid, regimeTf, ta.sma(close, smaLen)[1], lookahead=barmerge.lookahead_on)
+bullReg = not na(dSma) and dClose > dSma
+bearReg = not na(dSma) and dClose < dSma
+
+// ------------- signals -------------
+atr = ta.atr(atrLen)
+
+longExit  = downtrend or (not na(sl) and close < sl)
+shortExit = uptrend   or (not na(sh) and close > sh)
+
+// Entry = the BREAKOUT EVENT (crossover), NOT "price is above the level". A
+// persistent `close > sh` condition stays true bar after bar, so after a stop-out
+// Pine re-enters every bar => hundreds of churned commission losers (the 476-
+// trades bug). vectorbt is naturally throttled (a stop-out leaves close < sh, so
+// the level signal turns off), but Pine needs the explicit crossover to match.
+// crossover/crossunder fire ONCE, the bar price crosses the swing level.
+longBreak  = not na(sh) and ta.crossover(close, sh)
+shortBreak = not na(sl) and ta.crossunder(close, sl)
+
+// Also guard the contraction case: 4H can be BOTH higher-lows (uptrend) AND
+// lower-highs (downtrend) at once (~21% of bars); `not downtrend`/`not uptrend`
+// stops an entry that the opposite-trend exit would close immediately.
+longCond  = uptrend   and not downtrend and longBreak  and bullReg
+shortCond = useShorts and downtrend and not uptrend and shortBreak and bearReg
+
+// ------------- position sizing: risk 1% over a 2*ATR stop -------------
+stopDist = atrMultSl * atr
+qty = stopDist > 0 ? (strategy.equity * riskPct) / stopDist : na
+
+// ------------- orders -------------
+if longCond and qty > 0
+    strategy.entry("L", strategy.long, qty=qty)
+if shortCond and qty > 0
+    strategy.entry("S", strategy.short, qty=qty)
+
+// Freeze the hard stop at entry. With process_orders_on_close the fill is on the
+// SAME bar the signal fires, so stopDist (current bar) is exactly what qty was
+// sized with => real risk stays at 1% of equity.
+var float longStop  = na
+var float shortStop = na
+if strategy.position_size > 0 and strategy.position_size[1] <= 0
+    longStop := strategy.position_avg_price - stopDist
+if strategy.position_size < 0 and strategy.position_size[1] >= 0
+    shortStop := strategy.position_avg_price + stopDist
+
+// hard ATR stop
+strategy.exit("L-stop", "L", stop=longStop)
+strategy.exit("S-stop", "S", stop=shortStop)
+// structure-flip / level-break exits
+if strategy.position_size > 0 and longExit
+    strategy.close("L", comment="struct exit")
+if strategy.position_size < 0 and shortExit
+    strategy.close("S", comment="struct exit")
+
+// ------------- visuals -------------
+// Daily SMA(150) drawn on the 1H chart (stepped). This is the regime line —
+// price ABOVE it = green background (longs allowed), BELOW = red (shorts).
+plot(dSma, "Daily SMA150", color=color.new(color.orange, 0), linewidth=2)
+plot(sh,   "4H swing high", color=color.new(color.red,   30), style=plot.style_linebr, linewidth=2)
+plot(sl,   "4H swing low",  color=color.new(color.green, 30), style=plot.style_linebr, linewidth=2)
+bgcolor(bullReg ? color.new(color.green, 92) : bearReg ? color.new(color.red, 92) : na, title="Daily regime")
+plotshape(longCond,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+plotshape(shortCond, "Short", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
+
+// On-chart status panel for quick sanity-checking the gates
+var table dbg = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.cell(dbg, 0, 0, "daily close", text_color=color.white)
+    table.cell(dbg, 1, 0, str.tostring(dClose, format.mintick), text_color=color.white)
+    table.cell(dbg, 0, 1, "daily SMA150", text_color=color.white)
+    table.cell(dbg, 1, 1, str.tostring(dSma, format.mintick), text_color=color.white)
+    table.cell(dbg, 0, 2, "regime", text_color=color.white)
+    table.cell(dbg, 1, 2, bullReg ? "BULL (longs)" : bearReg ? "BEAR (shorts)" : "none",
+         text_color=bullReg ? color.lime : color.red)
+    table.cell(dbg, 0, 3, "trend(4H)", text_color=color.white)
+    table.cell(dbg, 1, 3, uptrend ? "up" : downtrend ? "down" : "flat", text_color=color.yellow)

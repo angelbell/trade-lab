@@ -1,0 +1,22 @@
+# --- environment (regenerable) ---
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# --- data feeds: large + broker-licensed + regenerable via the mt5-mcp bridge ---
+data/
+
+# --- scratch / OS / Windows-WSL cruft ---
+scratch/
+.DS_Store
+*Zone.Identifier*
+
+# --- local-only config (never publish secrets) ---
+*.env
+.env
+secrets.*
+config.local.*
+
+# --- local Claude Code config (machine-local; never publish) ---
+.claude/

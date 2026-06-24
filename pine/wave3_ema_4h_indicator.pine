@@ -1,0 +1,175 @@
+//@version=5
+// =============================================================================
+//  Wave-3 EMA エントリー・レーダー (4h) — インジケーター版
+//  ---------------------------------------------------------------------------
+//  機械化できる部分だけ自動化し、利確は裁量に残す:
+//    ・エントリー（GC→初回20EMA押し=基準足→基準足高値の実体抜け）= 機械 → マーク＆アラート
+//    ・損切り（直近安値）= 機械 → ライン表示
+//    ・利確目標（戻り高値/直近高値）= 裁量。機械だと小ピボット→目標小・大ピボット→目標消失で
+//      人間の「目立つ高値」を当てられない。→ 候補の過去高値を薄く出すだけ、選ぶのは人。
+//
+//  使い方: エントリー印が出たら、上の薄い候補ライン（過去の戻り高値）を見て、
+//          目立つやつを利確目標に自分で決める（半利→全利は手動 or ポジションツールで）。
+// =============================================================================
+indicator("[Wave-3 EMA 4H] Entry Radar (利確=裁量)", overlay=true, max_lines_count=500, max_labels_count=500)
+
+emaFastLen = input.int(20,  "Fast EMA", minval=1)
+emaSlowLen = input.int(200, "Slow EMA", minval=1)
+pivotLeft  = input.int(5,   "ピボット left", minval=1)
+pivotRight = input.int(5,   "ピボット right", minval=1)
+riskFloor  = input.float(0.5,"risk下限 (ATR)", step=0.1, minval=0.0)
+atrLen     = input.int(14,  "ATR length", minval=1)
+nCand      = input.int(3,   "候補目標ライン本数（上の過去高値）", minval=1, maxval=8)
+useLongs   = input.bool(true,  "ロング")
+useShorts  = input.bool(true,  "ショート")
+maxStore   = input.int(80,  "ピボット保持数", minval=10)
+
+emaF = ta.ema(close, emaFastLen)
+emaS = ta.ema(close, emaSlowLen)
+atr  = ta.atr(atrLen)
+gc = ta.crossover(emaF, emaS)
+dc = ta.crossunder(emaF, emaS)
+
+ph = ta.pivothigh(high, pivotLeft, pivotRight)
+pl = ta.pivotlow(low,  pivotLeft, pivotRight)
+var float[] swH = array.new_float()
+var float[] swL = array.new_float()
+if not na(ph)
+    array.push(swH, ph)
+    if array.size(swH) > maxStore
+        array.shift(swH)
+if not na(pl)
+    array.push(swL, pl)
+    if array.size(swL) > maxStore
+        array.shift(swL)
+
+f_recentBelow(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v < px
+            r := v
+    r
+f_recentAbove(arr, px) =>
+    float r = na
+    for k = 0 to array.size(arr) - 1
+        v = array.get(arr, k)
+        if v > px
+            r := v
+    r
+
+// 候補目標（上の過去高値を近い順に最大nCand本ライン描画）
+f_drawCandsUp(arr, px, col) =>
+    cnt = 0
+    prev = px
+    while cnt < nCand
+        float best = na
+        for k = 0 to array.size(arr) - 1
+            v = array.get(arr, k)
+            if v > prev
+                best := na(best) ? v : math.min(best, v)
+        if na(best)
+            break
+        line.new(bar_index, best, bar_index + 16, best, color=col, style=line.style_dotted, width=1)
+        label.new(bar_index + 16, best, str.format("{0,number,#.##}", best), style=label.style_none,
+             textcolor=col, size=size.tiny)
+        prev := best
+        cnt += 1
+f_drawCandsDn(arr, px, col) =>
+    cnt = 0
+    prev = px
+    while cnt < nCand
+        float best = na
+        for k = 0 to array.size(arr) - 1
+            v = array.get(arr, k)
+            if v < prev
+                best := na(best) ? v : math.max(best, v)
+        if na(best)
+            break
+        line.new(bar_index, best, bar_index + 16, best, color=col, style=line.style_dotted, width=1)
+        label.new(bar_index + 16, best, str.format("{0,number,#.##}", best), style=label.style_none,
+             textcolor=col, size=size.tiny)
+        prev := best
+        cnt += 1
+
+// ---- LONG state machine ----
+var int modeL = 0
+var float trigHiL = na
+bool touchL = false
+bool entryL = false
+float stopL = na
+if gc
+    modeL := 1
+    trigHiL := na
+else if dc
+    modeL := 0
+    trigHiL := na
+if modeL == 1 and not gc and low <= emaF
+    trigHiL := high
+    modeL := 2
+    touchL := true
+else if modeL == 2 and close > trigHiL
+    modeL := 0
+    trigHiL := na
+    if useLongs
+        s = f_recentBelow(swL, close)
+        if not na(s)
+            if close - s < riskFloor * atr
+                s := close - riskFloor * atr
+            stopL := s
+            entryL := true
+
+// ---- SHORT state machine ----
+var int modeS = 0
+var float trigLoS = na
+bool touchS = false
+bool entryS = false
+float stopS = na
+if dc
+    modeS := 1
+    trigLoS := na
+else if gc
+    modeS := 0
+    trigLoS := na
+if modeS == 1 and not dc and high >= emaF
+    trigLoS := low
+    modeS := 2
+    touchS := true
+else if modeS == 2 and close < trigLoS
+    modeS := 0
+    trigLoS := na
+    if useShorts
+        s = f_recentAbove(swH, close)
+        if not na(s)
+            if s - close < riskFloor * atr
+                s := close + riskFloor * atr
+            stopS := s
+            entryS := true
+
+// エントリー時：損切ライン＋候補目標ラインを描画
+if entryL
+    line.new(bar_index, stopL, bar_index + 16, stopL, color=color.new(color.red,0), width=2)        // 損切=直近安値
+    label.new(bar_index, stopL, "SL " + str.format("{0,number,#.##}", stopL), style=label.style_label_up,
+         color=color.new(color.red,20), textcolor=color.white, size=size.tiny)
+    f_drawCandsUp(swH, close, color.new(color.lime, 0))                                              // 利確候補=過去高値
+if entryS
+    line.new(bar_index, stopS, bar_index + 16, stopS, color=color.new(color.red,0), width=2)
+    label.new(bar_index, stopS, "SL " + str.format("{0,number,#.##}", stopS), style=label.style_label_down,
+         color=color.new(color.red,20), textcolor=color.white, size=size.tiny)
+    f_drawCandsDn(swL, close, color.new(color.lime, 0))
+
+// ---- plots / markers ----
+plot(emaF, "20EMA", color=color.new(color.orange,0), linewidth=2)
+plot(emaS, "200EMA", color=color.new(color.blue,0), linewidth=2)
+plotshape(gc, "GC", shape.triangleup, location.belowbar, color.new(color.green,0), size=size.tiny)
+plotshape(dc, "DC", shape.triangledown, location.abovebar, color.new(color.red,0), size=size.tiny)
+plot(modeL==2 ? trigHiL : na, "Lトリガー(基準足高値)", color=color.new(color.green,0), linewidth=1, style=plot.style_linebr)
+plot(modeS==2 ? trigLoS : na, "Sトリガー(基準足安値)", color=color.new(color.red,0), linewidth=1, style=plot.style_linebr)
+plotshape(touchL, "touch(L)", shape.circle, location.belowbar, color.new(color.white,0), size=size.tiny, text="touch")
+plotshape(touchS, "touch(S)", shape.circle, location.abovebar, color.new(color.white,0), size=size.tiny, text="touch")
+plotshape(entryL, "LONG", shape.labelup, location.belowbar, color.new(color.green,0), size=size.small, text="LONG", textcolor=color.white)
+plotshape(entryS, "SHORT", shape.labeldown, location.abovebar, color.new(color.red,0), size=size.small, text="SHORT", textcolor=color.white)
+
+// ---- alerts ----
+alertcondition(entryL, "Wave-3 LONG", "Wave-3 LONG: 基準足高値を実体抜け。SL=直近安値、利確は目立つ過去高値を裁量で。")
+alertcondition(entryS, "Wave-3 SHORT", "Wave-3 SHORT: 基準足安値を実体抜け。SL=直近戻り高値、利確は目立つ過去安値を裁量で。")

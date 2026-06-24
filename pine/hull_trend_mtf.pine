@@ -1,0 +1,59 @@
+//@version=4
+// hull trend taken from https://www.tradingview.com/script/9FDL1I9W-Hull-Trend/
+// fixed: hma3/getChannels were ignoring their _src/_length args (used global
+//        `close`/`length`/`len` instead) -> a(hl2) vs b(close) cross was wrong.
+//        also wrapped sqrt-length in int() for Pine v4 length-type safety.
+study("Hull Trend MTF", shorttitle="HMA Trend MTF", overlay=true)
+tf = input("240", title="Timeframe", type=input.resolution, options=["1","5","15","30","60","120","240","360","720","D","W"])
+src = input(hl2)
+length = input(24, title="Period", type=input.integer)
+shift = input(0, title="Shift", type=input.integer)
+
+showcross = input(true, "Show cross over/under")
+
+hma(_src, _length) =>
+    wma((2 * wma(_src, _length / 2)) - wma(_src, _length), int(round(sqrt(_length))))
+
+hma3(_src, _length) =>
+    p = _length / 2
+    wma(wma(_src, p / 3) * 3 - wma(_src, p / 2) - wma(_src, p), p)
+
+a = security(syminfo.tickerid, tf, hma(src, length)[shift])
+b = security(syminfo.tickerid, tf, hma3(src, length)[shift])
+c = b > a ? color.lime : color.red
+p1 = plot(a, color=c, linewidth=1, transp=75)
+p2 = plot(b, color=c, linewidth=1, transp=75)
+fill(p1, p2, color=c, transp=55)
+crossdn = a > b and a[1] < b[1]
+crossup = b > a and b[1] < a[1]
+plotshape(showcross and crossdn ? a : na, location=location.absolute, style=shape.labeldown, color=color.red, size=size.tiny, text="Sell", textcolor=color.white, transp=0, offset=0)
+plotshape(showcross and crossup ? a : na, location=location.absolute, style=shape.labelup, color=color.green, size=size.tiny, text="Buy", textcolor=color.white, transp=0, offset=0)
+alertcondition(showcross and crossdn ? a : na, title='hma long', message='hma: long ')
+alertcondition(showcross and crossup ? a : na, title='hma short', message='hma: short ')
+
+// ---- channel ----
+len = input(20)
+channelType = input(defval="Donchian", title="Channel Type", options=["NONE","Donchian","Bollinger","Envelope"])
+channelLen = input(14, minval=1, title="Channel Length")
+envPer = input(4, title="Envelope %", type=input.float, minval=0) / 100
+
+getChannels(_src, _len) =>
+    if channelType == "Bollinger"
+        ma = ema(_src, _len)
+        dev = stdev(_src, _len)
+        [ma + 2 * dev, ma - 2 * dev]
+    else
+        if channelType == "Donchian"
+            [highest(high[1], _len), lowest(low[1], _len)]
+        else
+            if channelType == "Envelope"
+                ma = ema(_src, _len)
+                [ma * (1 + envPer), ma * (1 - envPer)]
+            else
+                [na, na]
+
+[upperchannel, lowerchannel] = getChannels(src, len)
+u = plot(upperchannel, linewidth=1, color=color.gray, title="Upper")
+plot(avg(upperchannel, lowerchannel), linewidth=1, color=color.maroon, title="Middle")
+l = plot(lowerchannel, linewidth=1, color=color.gray, title="Lower")
+fill(u, l)

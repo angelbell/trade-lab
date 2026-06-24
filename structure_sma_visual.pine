@@ -1,0 +1,147 @@
+//@version=5
+// =====================================================================
+//  structure_sma — VISUAL-ONLY indicator (run on the 1H BTC/USDT chart)
+//
+//  This is the WATCH version: it draws the strategy's logic so you can SEE it
+//  on TradingView. It does NOT run a backtest (no P&L tester) — the verified
+//  numbers come from the Python pipeline (WFO median PF 1.58; holdout +ve in a
+//  -33% market). Here we only visualize: regime, 4H structure, and trade arrows.
+//
+//  Shows:
+//    - Daily SMA150 line + regime background (green = longs allowed, red = shorts)
+//    - 4H fractal swing high / low step-lines (the structure)
+//    - BUY / SELL arrows on the breakout entry, and an "exit" mark on the flip
+//    - Bar color while in a position (green long / red short / dim when flat)
+//    - A status panel (daily close vs SMA150, regime, 4H trend)
+//
+//  Logic mirrors compute_signals_structure() exactly: 4H higher-lows = uptrend,
+//  enter on a CROSSOVER of the last swing high (long) gated by daily SMA150;
+//  exit on structure flip or protective level break. Shorts are the mirror.
+// =====================================================================
+indicator("structure_sma VISUAL (1H/4H/SMA150)", overlay=true, max_labels_count=500)
+
+// ---------------- inputs ----------------
+fractal_n = input.int(3,    "Fractal N (bars each side)", minval=1)
+htf       = input.timeframe("240", "Structure timeframe (4H)")
+regimeTf  = input.timeframe("D",   "Regime timeframe (daily)")
+smaLen    = input.int(150,  "Regime SMA length")
+atrLen    = input.int(14,   "ATR length (hard stop)")
+atrMultSl = input.float(2.0,"ATR stop multiplier", step=0.5)
+useShorts = input.bool(true,"Show shorts")
+
+// ------------- 4H market structure (confirmed pivots, no repaint) -------------
+f_struct() =>
+    ph = ta.pivothigh(high, fractal_n, fractal_n)
+    pl = ta.pivotlow(low,  fractal_n, fractal_n)
+    var float lastSh = na
+    var float prevSh = na
+    var float lastSl = na
+    var float prevSl = na
+    if not na(ph)
+        prevSh := lastSh
+        lastSh := ph
+    if not na(pl)
+        prevSl := lastSl
+        lastSl := pl
+    [lastSh, prevSh, lastSl, prevSl]
+
+[sh, psh, sl, psl] = request.security(syminfo.tickerid, htf, f_struct(),
+     lookahead=barmerge.lookahead_off)
+
+uptrend   = not na(sl) and not na(psl) and sl > psl   // higher lows
+downtrend = not na(sh) and not na(psh) and sh < psh   // lower highs
+
+// ------------- daily SMA(150) regime gate (previous closed day, no leak) -------------
+dClose = request.security(syminfo.tickerid, regimeTf, close[1], lookahead=barmerge.lookahead_on)
+dSma   = request.security(syminfo.tickerid, regimeTf, ta.sma(close, smaLen)[1], lookahead=barmerge.lookahead_on)
+bullReg = not na(dSma) and dClose > dSma
+bearReg = not na(dSma) and dClose < dSma
+
+// ------------- signals (breakout = crossover event, not a level state) -------------
+longBreak  = not na(sh) and ta.crossover(close, sh)
+shortBreak = not na(sl) and ta.crossunder(close, sl)
+
+longCond  = uptrend   and not downtrend and longBreak  and bullReg
+shortCond = useShorts and downtrend and not uptrend and shortBreak and bearReg
+
+atr = ta.atr(atrLen)
+
+// ------------- lightweight position state (entry/exit arrows + ATR stop line) -------------
+// Two-stage exit, like the live strategy: whichever comes first wins —
+//   (1) HARD STOP: price touches entry ∓ 2*ATR (frozen at entry; volatility-
+//       adaptive but NOT trailing).
+//   (2) STRUCTURE STOP: 4H trend flips, or the swing low/high (sl/sh) breaks —
+//       this one DOES ratchet with structure (a trailing-style exit).
+var int   pos       = 0
+var float stopLevel = na   // the frozen hard ATR stop while in a position
+
+hitLongStop  = pos > 0 and not na(stopLevel) and low  <= stopLevel
+hitShortStop = pos < 0 and not na(stopLevel) and high >= stopLevel
+structExitL  = pos > 0 and (downtrend or (not na(sl) and close < sl))
+structExitS  = pos < 0 and (uptrend   or (not na(sh) and close > sh))
+
+exitByStop   = hitLongStop or hitShortStop
+exitByStruct = (structExitL or structExitS) and not exitByStop
+
+if pos > 0 and (hitLongStop or structExitL)
+    pos := 0
+    stopLevel := na
+if pos < 0 and (hitShortStop or structExitS)
+    pos := 0
+    stopLevel := na
+if pos == 0 and longCond
+    pos := 1
+    stopLevel := close - atrMultSl * atr
+if pos == 0 and shortCond
+    pos := -1
+    stopLevel := close + atrMultSl * atr
+
+goLong   = pos ==  1 and pos[1] !=  1
+goShort  = pos == -1 and pos[1] != -1
+exitNow  = pos ==  0 and pos[1] !=  0
+stopHit  = exitNow and exitByStop      // closed by the hard ATR stop
+flipExit = exitNow and not exitByStop  // closed by structure flip / level break
+
+// ------------- visuals -------------
+plot(dSma, "Daily SMA150", color=color.new(color.orange, 0), linewidth=2)
+plot(sh,   "4H swing high", color=color.new(color.red,   30), style=plot.style_linebr, linewidth=2)
+plot(sl,   "4H swing low",  color=color.new(color.green, 30), style=plot.style_linebr, linewidth=2)
+bgcolor(bullReg ? color.new(color.green, 92) : bearReg ? color.new(color.red, 92) : na, title="Daily regime")
+barcolor(pos > 0 ? color.lime : pos < 0 ? color.red : na, title="In-position")
+
+// Hard 2*ATR stop line — only drawn while in a position, frozen at entry. This is
+// the "insurance" stop (separate from the green/red structure swing lines above).
+plot(pos != 0 ? stopLevel : na, "ATR hard stop", color=color.new(color.fuchsia, 0),
+     style=plot.style_linebr, linewidth=2)
+
+plotshape(goLong,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text="BUY",  textcolor=color.white, size=size.small)
+plotshape(goShort, "SELL", shape.labeldown, location.abovebar, color.new(color.red,   0), text="SELL", textcolor=color.white, size=size.small)
+// Two kinds of close, labelled distinctly:
+//   STOP  (fuchsia) = the hard 2*ATR stop was hit (a loss got cut).
+//   EXIT  (gray)    = structure flipped / swing level broke (the trailing exit).
+// Long closes print above the bar, short closes below — next to the position.
+stopLongClose  = stopHit  and pos[1] > 0
+stopShortClose = stopHit  and pos[1] < 0
+flipLongClose  = flipExit and pos[1] > 0
+flipShortClose = flipExit and pos[1] < 0
+plotshape(stopLongClose,  "STOP L", shape.labeldown, location.abovebar, color.new(color.fuchsia, 0), text="STOP", textcolor=color.white, size=size.small)
+plotshape(stopShortClose, "STOP S", shape.labelup,   location.belowbar, color.new(color.fuchsia, 0), text="STOP", textcolor=color.white, size=size.small)
+plotshape(flipLongClose,  "EXIT L", shape.labeldown, location.abovebar, color.new(color.gray, 0),    text="EXIT", textcolor=color.white, size=size.small)
+plotshape(flipShortClose, "EXIT S", shape.labelup,   location.belowbar, color.new(color.gray, 0),    text="EXIT", textcolor=color.white, size=size.small)
+
+// status panel
+var table dbg = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.cell(dbg, 0, 0, "daily close", text_color=color.white)
+    table.cell(dbg, 1, 0, str.tostring(dClose, format.mintick), text_color=color.white)
+    table.cell(dbg, 0, 1, "daily SMA150", text_color=color.white)
+    table.cell(dbg, 1, 1, str.tostring(dSma, format.mintick), text_color=color.white)
+    table.cell(dbg, 0, 2, "regime", text_color=color.white)
+    table.cell(dbg, 1, 2, bullReg ? "BULL (longs)" : bearReg ? "BEAR (shorts)" : "none",
+         text_color=bullReg ? color.lime : color.red)
+    table.cell(dbg, 0, 3, "trend(4H)", text_color=color.white)
+    table.cell(dbg, 1, 3, uptrend ? "up" : downtrend ? "down" : "flat", text_color=color.yellow)
+
+// alerts so you can be pinged on a live signal
+alertcondition(goLong,  "structure_sma LONG",  "structure_sma: LONG breakout")
+alertcondition(goShort, "structure_sma SHORT", "structure_sma: SHORT breakout")

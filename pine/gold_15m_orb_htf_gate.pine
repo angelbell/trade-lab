@@ -1,0 +1,138 @@
+//@version=5
+// gold_15m_orb_htf_gate.pine  —  H17
+// ============================================================================
+// M15 ORB (Asian-range -> London breakout continuation, ride to session close).
+// 15-minute XAUUSD chart.  GATED by the 1H trend:
+//   prior completed 1H close > 1H EMA80 -> longs only;  < 1H EMA80 -> shorts only.
+// (For an M15 execution TF a daily regime gate is too heavy; align with the 1H trend.)
+//
+//  ROLE = SEE / ALERT / FORWARD-TEST.  (Mechanized from research/scalp_lab.py;
+//  validation lives in docs/.)
+//  運用上の注意 : TVのM15は~5ヶ月しか遡れず単一レジーム＝テスターP&Lで判定しないこと。
+//                 脆い（時期/方向に偏り）。サイズは小さく、実弾前に forward-test すること。
+// ============================================================================
+strategy("[GOLD 15M] ORB + 1H Trend Gate [H17]", overlay=true,
+     default_qty_type=strategy.fixed, default_qty_value=1,
+     initial_capital=10000, pyramiding=0,
+     commission_type=strategy.commission.cash_per_order, commission_value=0,
+     calc_on_every_tick=false, process_orders_on_close=false)
+
+// ---- inputs ----------------------------------------------------------------
+tz        = input.string("UTC", "Session timezone (match your Vantage server clock)",
+             tooltip="Python uses the broker-server timestamps literally as the clock. " +
+                     "If your TV feed is in a different tz, set it here so the hour windows " +
+                     "and the day boundary line up with the Python validation.")
+asiaStart = input.int(0,  "Asian range START hour", minval=0, maxval=23)
+asiaEnd   = input.int(7,  "Asian range END hour",   minval=1, maxval=24)
+boStart   = input.int(7,  "Breakout START hour",    minval=0, maxval=23)
+boEnd     = input.int(11, "Breakout END hour",      minval=1, maxval=24)
+exitHour  = input.int(20, "Force-flat hour (session tz)", minval=0, maxval=23)
+htfTf    = input.timeframe("60", "Trend-gate timeframe (1H default)")
+emaLen   = input.int(80, "Trend-gate EMA length", minval=5, tooltip="80 = balanced default.")
+slBufAtr = input.float(0.0, "SL buffer (ATR mult; 0 = exact opposite range edge)", step=0.1)
+useLong  = input.bool(true,  "Allow longs (1H uptrend)")
+useShort = input.bool(true,  "Allow shorts (1H downtrend)")
+useGate  = input.bool(true,  "Require 1H trend gate (turn OFF to isolate the gate)", group="Debug")
+showDiag = input.bool(true,  "Show diagnostic table", group="Debug")
+
+// ---- 1H trend gate, no-lookahead -------------------------------------------
+// TV-canonical no-repaint idiom: expr[1] + lookahead_on = prior COMPLETED HTF
+// bar (== Python htf_trend_gate's shift(1)). No future leak, no repaint.
+htfClose = request.security(syminfo.tickerid, htfTf, close[1],            barmerge.gaps_off, barmerge.lookahead_on)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaLen)[1], barmerge.gaps_off, barmerge.lookahead_on)
+gateReady   = not na(htfClose) and not na(htfEma)
+longRegime  = useGate ? (gateReady and htfClose > htfEma) : true
+shortRegime = useGate ? (gateReady and htfClose < htfEma) : true
+
+// ---- session helpers (hour-based, matches Python minute>=h*60 logic) --------
+h      = hour(time, tz)
+inAsia = h >= asiaStart and h < asiaEnd
+inBO   = h >= boStart   and h < boEnd
+dom    = dayofmonth(time, tz)
+newDay = dom != dom[1]                                     // new calendar day in tz
+
+// ---- Asian range (accumulate during Asian window, then FROZEN) -------------
+var float asiaHi = na
+var float asiaLo = na
+var bool  entered = false
+if newDay
+    asiaHi  := na
+    asiaLo  := na
+    entered := false
+if inAsia
+    asiaHi := na(asiaHi) ? high : math.max(asiaHi, high)
+    asiaLo := na(asiaLo) ? low  : math.min(asiaLo, low)
+
+slBuf = slBufAtr * ta.atr(14)
+
+// ---- entries: first BO-window CLOSE that clears the frozen range, trend-aligned
+rangeReady = not na(asiaHi) and not na(asiaLo)
+canEnter   = inBO and rangeReady and not entered and strategy.position_size == 0
+longBreak  = canEnter and close > asiaHi and longRegime  and useLong
+shortBreak = canEnter and close < asiaLo and shortRegime and useShort
+
+if longBreak
+    strategy.entry("L", strategy.long)
+    entered := true
+if shortBreak
+    strategy.entry("S", strategy.short)
+    entered := true
+
+// ---- stops: opposite range edge (intrabar); NO take-profit (ride to close) -
+if strategy.position_size > 0
+    strategy.exit("L-sl", from_entry="L", stop=asiaLo - slBuf)
+if strategy.position_size < 0
+    strategy.exit("S-sl", from_entry="S", stop=asiaHi + slBuf)
+
+// ---- forced flat at the session-close hour ---------------------------------
+if hour(time, tz) >= exitHour and strategy.position_size != 0
+    strategy.close_all(comment="eod")
+
+// ---- visuals & alerts ------------------------------------------------------
+plot(rangeReady ? asiaHi : na, "Asia High", color.new(color.teal, 0), style=plot.style_linebr)
+plot(rangeReady ? asiaLo : na, "Asia Low",  color.new(color.teal, 0), style=plot.style_linebr)
+bgcolor(longRegime ? color.new(color.green, 92) : shortRegime ? color.new(color.red, 92) : na, title="1H regime")
+plotshape(longBreak,  "Long break",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+plotshape(shortBreak, "Short break", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
+
+// strategy alerts: alertcondition() is inert inside strategy(), so use alert()
+if longBreak
+    alert("Gold M15 ORB long break (with 1H uptrend)",  alert.freq_once_per_bar_close)
+if shortBreak
+    alert("Gold M15 ORB short break (with 1H downtrend)", alert.freq_once_per_bar_close)
+
+// ---- diagnostics: where does the entry chain break? ------------------------
+var int nBO  = 0
+var int nCan = 0
+var int nL   = 0
+var int nS   = 0
+nBO  := nBO  + (inBO     ? 1 : 0)
+nCan := nCan + (canEnter ? 1 : 0)
+nL   := nL   + (longBreak  ? 1 : 0)
+nS   := nS   + (shortBreak ? 1 : 0)
+
+dgCell(t, col, row, txt, bg) =>
+    table.cell(t, col, row, txt, text_size=size.small, text_color=color.white, bgcolor=bg)
+
+var table dg = table.new(position.top_right, 2, 9, frame_color=color.gray, frame_width=1)
+if showDiag and barstate.islast
+    okc = color.new(color.teal, 0)
+    bad = color.new(color.red, 0)
+    dgCell(dg, 0, 0, "Chart TF",     color.new(color.blue, 0))
+    dgCell(dg, 1, 0, timeframe.period, timeframe.period == "15" ? okc : bad)
+    dgCell(dg, 0, 1, "BO bars seen",  color.new(color.blue, 0))
+    dgCell(dg, 1, 1, str.tostring(nBO), nBO > 0 ? okc : bad)
+    dgCell(dg, 0, 2, "Range ready",   color.new(color.blue, 0))
+    dgCell(dg, 1, 2, str.tostring(rangeReady), rangeReady ? okc : bad)
+    dgCell(dg, 0, 3, "1H data ok",    color.new(color.blue, 0))
+    dgCell(dg, 1, 3, str.tostring(gateReady), gateReady ? okc : bad)
+    dgCell(dg, 0, 4, "Regime now",    color.new(color.blue, 0))
+    dgCell(dg, 1, 4, longRegime ? "long" : shortRegime ? "short" : "none", longRegime or shortRegime ? okc : bad)
+    dgCell(dg, 0, 5, "canEnter ct",   color.new(color.blue, 0))
+    dgCell(dg, 1, 5, str.tostring(nCan), nCan > 0 ? okc : bad)
+    dgCell(dg, 0, 6, "Long/Short ct", color.new(color.blue, 0))
+    dgCell(dg, 1, 6, str.tostring(nL) + " / " + str.tostring(nS), nL + nS > 0 ? okc : bad)
+    dgCell(dg, 0, 7, "Closed trades", color.new(color.blue, 0))
+    dgCell(dg, 1, 7, str.tostring(strategy.closedtrades), strategy.closedtrades > 0 ? okc : bad)
+    dgCell(dg, 0, 8, "Hour now (tz)", color.new(color.blue, 0))
+    dgCell(dg, 1, 8, str.tostring(h), color.new(color.gray, 0))

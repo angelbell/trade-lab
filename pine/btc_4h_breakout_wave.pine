@@ -1,0 +1,145 @@
+//@version=5
+// =============================================================================
+//  [BTC 4H]  Breakout Wave -- Pattern B (3rd-wave) -- ZigZag / RR2 + daily KAMA gate.
+//            4H chart, long-only.  BTC defaults: daily SMA gate OFF, KAMA-rising gate ON.
+//
+//  ロジック（手法B = 第3波ブレイク）:
+//    波の検出 : オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）。
+//    骨格     : L0(安)->H1(高=1波天井)->L2(安) で L2>L0（higher low）。H1>80EMA（任意ゲート）。
+//    エントリ : L2 確定後、足が H1 を「終値で」上抜けで発注（次足始値）。
+//    損切り   : L2（2波安値）。利確: 損切り幅 × RR（既定 1:2）。サイズ: 1トレード = 資金の riskPct%。
+//    ゲート   : 日足KAMA上昇中のみロング（BTC既定ON）。日足SMAゲートは既定OFF。
+//
+//  no-lookahead: 日足は [1] 参照（前日確定）+ lookahead_off。
+//  運用上の注意 : 1%リスク上限・実DDはバックテストの1.5-2倍想定。スワップ未計上、終値計算→
+//                 次足約定で1本ぶんの誤差。4H チャートに適用すること。
+// =============================================================================
+strategy("[BTC 4H] Breakout Wave Pattern-B (ZigZag RR2)",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.02)
+
+// ----- inputs ----------------------------------------------------------------
+zzK      = input.float(2.0,   "ZigZag reversal (ATR)",  step = 0.25, minval = 0.5)
+atrLen   = input.int(14,      "ATR length",             minval = 1)
+trendLen = input.int(80,      "Trend EMA (gate)",       minval = 1)
+useGate  = input.bool(true,   "Require wave-1 high above trend EMA")
+rr       = input.float(2.0,   "Reward : Risk",          step = 0.5, minval = 0.5)
+boWindow = input.int(20,      "Breakout window (bars after wave-2 low)", minval = 1)
+riskPct  = input.float(1.0,   "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
+useDaily = input.bool(false,  "Daily SMA regime gate (OFF for BTC by default)")
+dSmaLen  = input.int(150,     "Daily SMA length (regime gate)", minval = 1)
+dSlopeK  = input.int(10,      "Daily SMA slope lookback (rising over k days; 0=off)", minval = 0)
+useKama  = input.bool(true,   "Daily KAMA-rising regime gate (ON for BTC by default)")
+kamaLen  = input.int(14,      "Daily KAMA length", minval = 2)
+
+atr   = ta.atr(atrLen)
+ema80 = ta.ema(close, trendLen)
+flat  = strategy.position_size == 0
+
+// Kaufman Adaptive MA (KAMA) -- Pine has no built-in ta.kama. Efficiency-ratio-modulated
+// smoothing (fast=2, slow=30): speeds up in clean trends, slows in chop.
+f_kama(src, len) =>
+    mom = math.abs(src - src[len])
+    vol = math.sum(math.abs(src - src[1]), len)
+    er  = vol != 0 ? mom / vol : 0.0
+    sc  = math.pow(er * (2.0 / 3.0 - 2.0 / 31.0) + 2.0 / 31.0, 2)
+    var float k = na
+    k := na(k[1]) ? src : k[1] + sc * (src - k[1])
+    k
+
+// daily regime (OFF by default for BTC). prior COMPLETED day's close above a RISING
+// daily SMA; close[1]/sma[1] + lookahead_off => no repaint / no lookahead.
+dSmaNow  = request.security(syminfo.tickerid, "1D", ta.sma(close, dSmaLen)[1],            lookahead = barmerge.lookahead_off)
+dClose1  = request.security(syminfo.tickerid, "1D", close[1],                              lookahead = barmerge.lookahead_off)
+dSmaPast = request.security(syminfo.tickerid, "1D", ta.sma(close, dSmaLen)[1 + dSlopeK],   lookahead = barmerge.lookahead_off)
+dailyUp = (dClose1 > dSmaNow) and (dSlopeK <= 0 or dSmaNow > dSmaPast)
+dailyOk = (not useDaily) or dailyUp
+
+// daily KAMA(kamaLen)-rising regime gate -- the VALIDATED BTC gate. prior COMPLETED daily
+// KAMA rising ([1] vs [2]) + lookahead_off => no repaint / no lookahead (same idiom as SMA gate).
+dKama1 = request.security(syminfo.tickerid, "1D", f_kama(close, kamaLen)[1], lookahead = barmerge.lookahead_off)
+dKama2 = request.security(syminfo.tickerid, "1D", f_kama(close, kamaLen)[2], lookahead = barmerge.lookahead_off)
+kamaUp = dKama1 > dKama2
+kamaOk = (not useKama) or kamaUp
+
+// ----- online ZigZag (ATR-threshold reversal) --------------------------------
+var int   zzDir = 1        // +1 = tracking a swing HIGH, -1 = tracking a swing LOW
+var float zzExt = na       // running extreme since the last confirmed swing
+if na(zzExt)
+    zzExt := high
+
+// confirmed-swing memory (the L0 -> H1 -> L2 skeleton)
+var float swHigh    = na   // most recent confirmed swing HIGH  (H1)
+var float swLow     = na   // most recent confirmed swing LOW   (L2)
+var float swLowPrev = na   // the swing LOW before that          (L0)
+
+// armed breakout (set when a valid L0->H1->L2 closes; waits for the H1 break)
+var bool  armed  = false
+var float armH1  = na
+var float armL2  = na
+var int   armBar = na
+
+thr = zzK * atr
+
+// --- update the ZigZag and the swing memory (mirrors the Python detector) ---
+if zzDir >= 0
+    if high > zzExt
+        zzExt := high
+    else if zzExt - low >= thr            // reversed down enough -> swing HIGH
+        swHigh := zzExt
+        zzDir  := -1
+        zzExt  := low
+if zzDir <= 0
+    if low < zzExt
+        zzExt := low
+    else if high - zzExt >= thr           // reversed up enough -> swing LOW (= L2)
+        swLowPrev := swLow                // shift L2 -> L0
+        swLow     := zzExt
+        zzDir     := 1
+        zzExt     := high
+        // arm if the skeleton is valid: higher low + H1 above the origin (+gate)
+        okStruct = not na(swHigh) and not na(swLowPrev) and swLow > swLowPrev and swHigh > swLowPrev
+        okGate   = (not useGate) or (not na(ema80) and swHigh > ema80)
+        if okStruct and okGate
+            armed  := true
+            armH1  := swHigh
+            armL2  := swLow
+            armBar := bar_index
+
+// expire the arm if the breakout never came inside the window
+if armed and (bar_index - armBar) > boWindow
+    armed := false
+
+// ----- entry: confirmed close above H1 (next bar after L2), risk-sized -------
+var float curStop = na
+var float curTgt  = na
+if armed and flat and bar_index > armBar and close > armH1
+    if dailyOk and kamaOk                   // SMA gate (off for BTC) AND KAMA-rising gate (on)
+        risk = close - armL2
+        if risk > 0
+            curStop := armL2
+            curTgt  := close + rr * risk
+            qty = (strategy.equity * riskPct) / risk
+            strategy.entry("L", strategy.long, qty = qty)
+    armed := false                          // consume the arm on the breakout bar either way
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
+
+// ----- plots -----------------------------------------------------------------
+plot(useDaily ? dSmaNow : na, "Daily SMA (regime)", color = color.new(color.purple, 0), linewidth = 1)
+bgcolor(useDaily and not dailyUp ? color.new(color.red, 92) : na, title = "SMA regime down/flat (longs gated off)")
+bgcolor(useKama and not kamaUp ? color.new(color.orange, 90) : na, title = "Daily KAMA falling (longs gated off)")
+plot(ema80, "Trend EMA", color = color.new(color.blue, 0), linewidth = 2)
+plot(armed ? armH1 : na, "Armed H1 (break line)", color = color.new(color.orange, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
+     style = plot.style_linebr, linewidth = 1)
+plotshape(armed and flat and bar_index > armBar and close > armH1, title = "Breakout",
+     style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)

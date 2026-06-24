@@ -1,0 +1,165 @@
+//@version=5
+// =============================================================================
+//  [GOLD 5M]  200-EMA pullback + structure-break scalp  (動画手法の Pine 移植 = STRATEGY)
+//  LONG（上昇押し目買い）+ SHORT（下降戻り売り = 上下反転）両対応。
+//  ---------------------------------------------------------------------------
+//  research/ema200_scalp.py の忠実移植。ロジック目視確認用の strategy 版。
+//
+//  ★ 用途の注意（重要）: この機械化ルールはフル履歴では負ける（エッジは裁量の線引き＝どの斜め
+//    ラインを引くかの選別に宿り、機械化しきれない）。よって実トレードでなく「裁量の補助／ロジック
+//    目視確認」用。TVバックテストの直近スライス(数ヶ月)がプラスに見えても全史では負け＝チェリー
+//    ピックの罠。判断は必ずフル履歴で。
+//
+//  ロジック:
+//    LONG : 上昇(20>200) → 200EMAに下からタッチ → 直近の「斜め切下げライン(lower highs)」or
+//           ダブルボトム・ネックラインを終値で上抜け → 次足始値で買い。SL=直近安値, TP=N計算(上)
+//    SHORT: 下降(20<200) → 200EMAに上からタッチ → 「斜め切上げライン(higher lows)」or
+//           ダブルトップ・ネックラインを終値で下抜け → 次足始値で売り。SL=直近高値, TP=N計算(下)
+//    線は方向に合う局面でのみ・直近ローカルのみ・最大5本(古いのは消す)。
+//  ※ピボットは N本フラクタル(確定はN本後=リペイント無し)。Python版はATR-ZigZag=細部に差。
+// =============================================================================
+strategy("GOLD 5M 200EMA pullback structure-break L/S [logic-check]", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.cash_per_order, commission_value=0.30, pyramiding=0, calc_on_every_tick=false, max_lines_count=500, max_labels_count=500)
+
+// ---- inputs ----
+emaFastLen = input.int(20,  "EMA fast")
+emaSlowLen = input.int(200, "EMA slow")
+pivLen     = input.int(5,   "pivot length (fractal, confirm N bars later)")
+touchW     = input.int(36,  "200EMA touch armed window (bars)")
+localBars  = input.int(80,  "trendline anchors within N bars (LOCAL pullback line)")
+dbTolAtr   = input.float(0.5, "double top/bottom equal-extreme tol (ATR)")
+useTL      = input.bool(true, "trigger: trendline break")
+useDB      = input.bool(true, "trigger: double top/bottom neckline break")
+useLong    = input.bool(true, "trade LONG (uptrend pullback)")
+useShort   = input.bool(true, "trade SHORT (downtrend pullback)")
+useHTF     = input.bool(true, "follow HIGHER-TF trend (only long if HTF up, short if HTF down)")
+htfTf      = input.timeframe("60", "higher-TF for trend filter (e.g. 60=1H, 240=4H)")
+slBufAtr   = input.float(0.1, "SL buffer outside swing (ATR)  [少し外側]")
+skipRRlt1  = input.bool(true, "skip if RR < 1")
+skipRRgt3  = input.bool(true, "skip if RR > 3 (波形いびつ/詰まり)")
+reqTPbeyond= input.bool(true, "skip if TP が直近高安を超えない (壁を越えない)")
+// 機械化不能な裁量「波形が汚い/綺麗なラインが引けない」は表現できない。
+
+ema20  = ta.ema(close, emaFastLen)
+ema200 = ta.ema(close, emaSlowLen)
+atr    = ta.atr(14)
+up = ema20 > ema200
+dn = ema20 < ema200
+plot(ema20,  "EMA20",  color.new(color.aqua, 0), 1)
+plot(ema200, "EMA200", color.new(color.orange, 0), 2)
+
+// ---- higher-TF trend filter (MTF alignment; no-lookahead) ----
+htfSig = request.security(syminfo.tickerid, htfTf, math.sign(ta.ema(close, emaFastLen) - ta.ema(close, emaSlowLen)), lookahead=barmerge.lookahead_off)
+htfUp = not useHTF or htfSig > 0
+htfDn = not useHTF or htfSig < 0
+htf200 = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaSlowLen), lookahead=barmerge.lookahead_off)
+plot(useHTF ? htf200 : na, "HTF 200EMA", color.new(color.orange, 55), 3)
+
+// ---- confirmed pivots (causal: known pivLen bars later) ----
+ph = ta.pivothigh(pivLen, pivLen)
+pl = ta.pivotlow(pivLen, pivLen)
+var float ph1 = na
+var float ph2 = na
+var int   nph1 = na
+var int   nph2 = na
+var float pl1 = na
+var float pl2 = na
+var int   npl1 = na
+var int   npl2 = na
+var line[] tlsRes = array.new_line()                     // descending resistance (LONG ctx)
+var line[] tlsSup = array.new_line()                     // ascending support   (SHORT ctx)
+if not na(ph)
+    ph2  := ph1
+    ph1  := ph
+    nph2 := nph1
+    nph1 := bar_index - pivLen
+    // descending line ONLY in uptrend AND HTF-up (long ctx); local; keep last 5
+    if up and htfUp and not na(ph2) and ph1 < ph2 and nph1 > nph2 and (nph1 - nph2) <= localBars
+        lnR = line.new(nph2, ph2, nph1, ph1, xloc=xloc.bar_index, color=color.new(color.red, 0), width=2, extend=extend.right)
+        array.push(tlsRes, lnR)
+        if array.size(tlsRes) > 5
+            line.delete(array.shift(tlsRes))
+if not na(pl)
+    pl2  := pl1
+    pl1  := pl
+    npl2 := npl1
+    npl1 := bar_index - pivLen
+    // ascending line ONLY in downtrend AND HTF-down (short ctx); local; keep last 5
+    if dn and htfDn and not na(pl2) and pl1 > pl2 and npl1 > npl2 and (npl1 - npl2) <= localBars
+        lnS = line.new(npl2, pl2, npl1, pl1, xloc=xloc.bar_index, color=color.new(color.lime, 0), width=2, extend=extend.right)
+        array.push(tlsSup, lnS)
+        if array.size(tlsSup) > 5
+            line.delete(array.shift(tlsSup))
+
+// ---- 200EMA touch arming (direction-specific) ----
+touchUp = up and low  <= ema200                          // long: pull back DOWN to 200EMA
+touchDn = dn and high >= ema200                          // short: rally UP to 200EMA
+var int lastTU = na
+var int lastTD = na
+if touchUp
+    lastTU := bar_index
+if touchDn
+    lastTD := bar_index
+armedUp = not na(lastTU) and (bar_index - lastTU) <= touchW
+armedDn = not na(lastTD) and (bar_index - lastTD) <= touchW
+bgcolor(armedUp and up ? color.new(color.green, 92) : armedDn and dn ? color.new(color.red, 93) : na)
+plotshape(touchUp, "touchUp", shape.circle, location.belowbar, color.new(color.yellow, 0), size=size.tiny)
+plotshape(touchDn, "touchDn", shape.circle, location.abovebar, color.new(color.orange, 0), size=size.tiny)
+
+// ---- projected trendlines (value at current bar) ----
+descending = not na(ph1) and not na(ph2) and ph1 < ph2 and nph1 > nph2 and (nph1 - nph2) <= localBars and (bar_index - nph1) <= localBars
+projRes = descending ? ph1 + (ph1 - ph2) / (nph1 - nph2) * (bar_index - nph1) : na
+ascending = not na(pl1) and not na(pl2) and pl1 > pl2 and npl1 > npl2 and (npl1 - npl2) <= localBars and (bar_index - npl1) <= localBars
+projSup = ascending ? pl1 + (pl1 - pl2) / (npl1 - npl2) * (bar_index - npl1) : na
+
+// ---- triggers ----
+dbLows  = not na(pl1) and not na(pl2) and math.abs(pl1 - pl2) <= dbTolAtr * atr   // double bottom
+dtHighs = not na(ph1) and not na(ph2) and math.abs(ph1 - ph2) <= dbTolAtr * atr   // double top
+brkResTL = useTL and descending and up and armedUp and ta.crossover(close, projRes)
+brkDB    = useDB and dbLows and up and armedUp and ta.crossover(close, ph1)        // neckline ~= high between the lows
+longSig  = brkResTL or brkDB
+brkSupTL = useTL and ascending and dn and armedDn and ta.crossunder(close, projSup)
+brkDT    = useDB and dtHighs and dn and armedDn and ta.crossunder(close, pl1)       // neckline ~= low between the highs
+shortSig = brkSupTL or brkDT
+
+// ---- structure / stop / measured-move (N計算) TP ----
+// LONG : L0=pl2 -> H1=ph1 -> L2=pl1 ; stop=pl1-buf ; tgt=pl1+(ph1-pl2)
+// SHORT: H0=ph2 -> L1=pl1 -> H2=ph1 ; stop=ph1+buf ; tgt=ph1-(ph2-pl1)
+stopL = na(pl1) ? na : pl1 - slBufAtr * atr
+tgtL  = (not na(pl1) and not na(ph1) and not na(pl2)) ? pl1 + (ph1 - pl2) : na
+rrL   = (not na(stopL) and (close - stopL) > 0) ? (tgtL - close) / (close - stopL) : na
+stopS = na(ph1) ? na : ph1 + slBufAtr * atr
+tgtS  = (not na(ph1) and not na(pl1) and not na(ph2)) ? ph1 - (ph2 - pl1) : na
+rrS   = (not na(stopS) and (stopS - close) > 0) ? (close - tgtS) / (stopS - close) : na
+
+okL_lo = not skipRRlt1 or (not na(rrL) and rrL >= 1.0)
+okL_hi = not skipRRgt3 or (not na(rrL) and rrL <= 3.0)
+okL_wall = not reqTPbeyond or (not na(ph1) and tgtL > ph1)        // TP が直近高値を超える
+okS_lo = not skipRRlt1 or (not na(rrS) and rrS >= 1.0)
+okS_hi = not skipRRgt3 or (not na(rrS) and rrS <= 3.0)
+okS_wall = not reqTPbeyond or (not na(pl1) and tgtS < pl1)        // TP が直近安値を下回る
+
+canLong  = useLong  and htfUp and longSig  and strategy.position_size == 0 and not na(stopL) and not na(tgtL) and (close - stopL) > 0 and tgtL > close and okL_lo and okL_hi and okL_wall
+canShort = useShort and htfDn and shortSig and strategy.position_size == 0 and not na(stopS) and not na(tgtS) and (stopS - close) > 0 and tgtS < close and okS_lo and okS_hi and okS_wall
+
+var float curStop = na
+var float curTgt  = na
+if canLong
+    curStop := stopL
+    curTgt  := tgtL
+    strategy.entry("L", strategy.long)
+    label.new(bar_index, low, "L", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+    line.new(bar_index, curStop, bar_index + 20, curStop, xloc=xloc.bar_index, color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, curTgt,  bar_index + 20, curTgt,  xloc=xloc.bar_index, color=color.new(color.green, 0), width=1, style=line.style_dashed)
+    alert("GOLD 5m: 200EMA-pullback structure-break LONG", alert.freq_once_per_bar_close)
+if canShort
+    curStop := stopS
+    curTgt  := tgtS
+    strategy.entry("S", strategy.short)
+    label.new(bar_index, high, "S", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+    line.new(bar_index, curStop, bar_index + 20, curStop, xloc=xloc.bar_index, color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, curTgt,  bar_index + 20, curTgt,  xloc=xloc.bar_index, color=color.new(color.green, 0), width=1, style=line.style_dashed)
+    alert("GOLD 5m: 200EMA-pullback structure-break SHORT", alert.freq_once_per_bar_close)
+if strategy.position_size > 0
+    strategy.exit("XL", "L", stop=curStop, limit=curTgt)
+if strategy.position_size < 0
+    strategy.exit("XS", "S", stop=curStop, limit=curTgt)

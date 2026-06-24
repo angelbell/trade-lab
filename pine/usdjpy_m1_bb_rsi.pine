@@ -1,0 +1,94 @@
+//@version=6
+// =============================================================================
+//  BB + RSI Mean-Reversion  (USDJPY 1-min)  --  hard SL: ATR-mult OR fixed pips
+//  ---------------------------------------------------------------------------
+//  bb_rsi.py の Pine 移植版。逆張り・常時ドテン＋ハードSL。
+//
+//  ロジック（逆張り・常時ドテン）:
+//    上下バンド : SMA(length) ± mult*STDEV(length)
+//    買い       : close が下バンドを上抜け(crossover) かつ RSI<=oversold
+//    売り       : close が上バンドを下抜け(crossunder) かつ RSI>=overbought
+//    エントリー : シグナルの確定足 -> 次足始値で成行約定（反対建玉は自動ドテン）。
+//    損切り     : ★ハードSL。modeで切替:
+//                  ATR   -> SL距離 = atrMult * ATR(atrLen)   ボラ連動（将来に頑健）
+//                  Fixed -> SL距離 = slPips * pipSize         固定（既定50, 30も可）
+//                 SLはエントリー時に固定（その後は動かさない＝検証と一致）。
+//    サイズ     : 1トレード = 資金の riskPct% を SL距離で割って算出
+//                 -> SLが広い時ほど枚数が減り、リスクは常に一定（ATR時に重要）。
+//
+//  ★ 注意:
+//    - スプレッドは slippage(ティック)で近似（既定3≒0.3pip）。実スプレッドに合わせて。
+//    - 決済は SL か 反対シグナルのドテンのみ（利確指値は無い）。
+// =============================================================================
+strategy("[USDJPY M1] BB+RSI Mean-Reversion (SL ATR/Fixed)",
+     overlay                 = true,
+     initial_capital         = 100000,
+     default_qty_type        = strategy.percent_of_equity,   // robust default -> always fills
+     default_qty_value       = 10,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.0,
+     slippage                = 3)            // ≒0.3pip spread (mintick 0.001); 広げて調整
+
+// ----- inputs ----------------------------------------------------------------
+length  = input.int(21,   "BB length",       minval = 1)
+mult    = input.float(2.0, "BB mult",        step = 0.1, minval = 0.1)
+rsiLen  = input.int(14,   "RSI length",      minval = 1)
+osLevel = input.int(30,   "RSI oversold",    minval = 1, maxval = 100)
+obLevel = input.int(70,   "RSI overbought",  minval = 1, maxval = 100)
+
+slMode  = input.string("ATR", "Stop-loss mode", options = ["ATR", "Fixed"])
+atrMult = input.float(30.0, "  ATR SL multiple", step = 1.0, minval = 0.1)
+atrLen  = input.int(14,    "  ATR length",        minval = 1)
+slPips  = input.float(50.0, "  Fixed SL (pips) -- try 30 or 50", step = 5.0, minval = 1.0)
+pipSize = input.float(0.01, "  Pip size (0.01 = JPY pairs)", step = 0.001)
+// sizing: "Percent" = % of equity (always fills, use this to VALIDATE signals);
+//         "Risk %"  = SL-based 1R risk (matches the Python DD% math, but on FX a
+//                     tiny unit count can round to 0 and produce NO trades).
+sizeMode = input.string("Percent", "Sizing mode", options = ["Percent", "Risk %"])
+riskPct  = input.float(1.0, "  Risk per trade (% equity, Risk% mode)", step = 0.25, minval = 0.0) / 100.0
+
+// ----- indicators ------------------------------------------------------------
+basis = ta.sma(close, length)
+dev   = mult * ta.stdev(close, length)
+upper = basis + dev
+lower = basis - dev
+rsiV  = ta.rsi(close, rsiLen)
+atr   = ta.atr(atrLen)
+
+buyEntry  = ta.crossover(close, lower)  and rsiV <= osLevel
+sellEntry = ta.crossunder(close, upper) and rsiV >= obLevel
+
+// stop distance in price (fixed at entry below)
+slDist = slMode == "ATR" ? atrMult * atr : slPips * pipSize
+
+// ----- entries: stop-and-reverse (market -> next open), risk-sized -----------
+longNow  = strategy.position_size > 0
+shortNow = strategy.position_size < 0
+
+// Risk% mode -> SL-based qty; Percent mode -> na lets the default % sizing apply
+riskQty = sizeMode == "Risk %" and slDist > 0 ? (strategy.equity * riskPct) / slDist : na
+
+if buyEntry and not longNow and slDist > 0
+    strategy.entry("L", strategy.long,  qty = riskQty)
+if sellEntry and not shortNow and slDist > 0
+    strategy.entry("S", strategy.short, qty = riskQty)
+
+// ----- hard stop-loss, FIXED at the entry (not trailed) ----------------------
+var float stopPx = na
+if longNow and strategy.position_size[1] <= 0           // just flipped/opened long
+    stopPx := strategy.position_avg_price - slDist
+if shortNow and strategy.position_size[1] >= 0          // just flipped/opened short
+    stopPx := strategy.position_avg_price + slDist
+if longNow
+    strategy.exit("L-sl", "L", stop = stopPx)
+if shortNow
+    strategy.exit("S-sl", "S", stop = stopPx)
+
+// ----- plots -----------------------------------------------------------------
+plot(basis, "Basis", color = color.new(color.gray, 0))
+plot(upper, "Upper", color = color.new(color.teal, 0))
+plot(lower, "Lower", color = color.new(color.teal, 0))
+plot(strategy.position_size != 0 ? stopPx : na, "Stop", color = color.new(color.red, 0),
+     style = plot.style_linebr, linewidth = 1)

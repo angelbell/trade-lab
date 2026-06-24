@@ -1,0 +1,152 @@
+//@version=5
+// HTF Level Radar -- a DISCRETION-SUPPORT tool, not an auto-trader.
+// The machine does NOT decide. It (1) draws the proven higher-TF S/R levels,
+// (2) ALERTS the instant price tags one ("look now"), and (3) shows the reversal
+// context (struct / mom / stall) so YOU judge "does this level hold?".
+//
+// Logic ported 1:1 from bounce_signals(): HTF fractal pivots = S/R; tag within
+// tol*ATR; confirmations struct(break recent local high/low)+mom(RSI turning)+
+// stall(wick rejection = "下落が止まった"). cf_win = bars to confirm after a tag.
+indicator("[GOLD 5M] HTF Level Radar", shorttitle="HTF Radar", overlay=true, max_lines_count=50, max_labels_count=200)
+
+// ----- inputs -----
+tf1      = input.timeframe("15", "HTF #1 (pivots)")
+tf2      = input.timeframe("60", "HTF #2 (pivots)")
+piv_k    = input.int(3, "Pivot half-width (bars each side)", minval=1)
+sr_keep  = input.int(3, "Levels to keep per side (most recent)", minval=1, maxval=20)
+tol_atr  = input.float(0.5, "Tag tolerance (x ATR)", step=0.1)
+cf_win   = input.int(6, "Bars to confirm after a tag", minval=1)
+cf_lb    = input.int(6, "Local high/low lookback (struct)", minval=1)
+mom_th   = input.float(45.0, "RSI threshold (mom)")
+rej      = input.float(0.6, "Stall: close within this frac of bar range", step=0.05)
+atr_len  = input.int(14, "ATR length")
+rsi_len  = input.int(14, "RSI length")
+showCtx  = input.bool(true, "Show context table")
+
+atr = ta.atr(atr_len)
+tol = tol_atr * atr
+rsi = ta.rsi(close, rsi_len)
+
+// ----- HTF fractal pivots (proven S/R, confirmed k bars later = no lookahead) -----
+ph1 = request.security(syminfo.tickerid, tf1, ta.pivothigh(piv_k, piv_k))
+pl1 = request.security(syminfo.tickerid, tf1, ta.pivotlow(piv_k, piv_k))
+ph2 = request.security(syminfo.tickerid, tf2, ta.pivothigh(piv_k, piv_k))
+pl2 = request.security(syminfo.tickerid, tf2, ta.pivotlow(piv_k, piv_k))
+
+var resLvls  = array.new_float()
+var supLvls  = array.new_float()
+var resLines = array.new_line()
+var supLines = array.new_line()
+
+addLevel(price, isRes) =>
+    if not na(price)
+        ln = line.new(bar_index, price, bar_index + 1, price, extend=extend.right,
+                 color=isRes ? color.new(color.red, 25) : color.new(color.green, 25), width=1)
+        lbls = isRes ? resLines : supLines
+        vals = isRes ? resLvls  : supLvls
+        array.push(vals, price)
+        array.push(lbls, ln)
+        if array.size(lbls) > sr_keep
+            line.delete(array.shift(lbls))
+            array.shift(vals)
+
+addLevel(ph1, true)
+addLevel(ph2, true)
+addLevel(pl1, false)
+addLevel(pl2, false)
+
+// ----- nearest level on each side -----
+nearestSup = float(na)
+if array.size(supLvls) > 0
+    for i = 0 to array.size(supLvls) - 1
+        lv = array.get(supLvls, i)
+        if lv <= close + tol and (na(nearestSup) or lv > nearestSup)
+            nearestSup := lv
+nearestRes = float(na)
+if array.size(resLvls) > 0
+    for i = 0 to array.size(resLvls) - 1
+        lv = array.get(resLvls, i)
+        if lv >= close - tol and (na(nearestRes) or lv < nearestRes)
+            nearestRes := lv
+
+// ----- tag detection (new entry into the zone) -----
+inSup  = not na(nearestSup) and low  <= nearestSup + tol and close >= nearestSup - tol
+inRes  = not na(nearestRes) and high >= nearestRes - tol and close <= nearestRes + tol
+newSupTag = inSup and not inSup[1]
+newResTag = inRes and not inRes[1]
+
+// ----- confirmations (validated: struct + mom; stall shown alongside) -----
+locHi = ta.highest(high, cf_lb)[1]
+locLo = ta.lowest(low,  cf_lb)[1]
+rng   = high - low
+structUp = close > locHi
+structDn = close < locLo
+momUp = rsi > rsi[1] and rsi >= mom_th
+momDn = rsi < rsi[1] and rsi <= 100 - mom_th
+stallUp = rng > 0 and (close - low) / rng >= rej
+stallDn = rng > 0 and (high - close) / rng >= rej
+
+// ----- arm-on-tag -> confirm-within-cf_win state machine (mirrors bounce_signals) -----
+var int   armLongBar = na
+var float armSup     = na
+var int   armShortBar = na
+var float armRes      = na
+
+if newSupTag
+    armLongBar := bar_index
+    armSup     := nearestSup
+if not na(armLongBar) and (bar_index - armLongBar > cf_win or close < armSup - tol)
+    armLongBar := na
+if newResTag
+    armShortBar := bar_index
+    armRes      := nearestRes
+if not na(armShortBar) and (bar_index - armShortBar > cf_win or close > armRes + tol)
+    armShortBar := na
+
+armedLong  = not na(armLongBar)
+armedShort = not na(armShortBar)
+confirmLong  = armedLong  and structUp and momUp
+confirmShort = armedShort and structDn and momDn
+if confirmLong
+    armLongBar := na
+if confirmShort
+    armShortBar := na
+
+// ----- markers -----
+plotshape(newSupTag, title="Support tag", style=shape.triangleup,   location=location.belowbar,
+     color=color.new(color.teal, 0), size=size.tiny, text="tag")
+plotshape(newResTag, title="Resistance tag", style=shape.triangledown, location=location.abovebar,
+     color=color.new(color.maroon, 0), size=size.tiny, text="tag")
+plotshape(confirmLong,  title="Confirmed long",  style=shape.labelup,   location=location.belowbar,
+     color=color.new(color.green, 0), textcolor=color.white, size=size.small, text="LONG?")
+plotshape(confirmShort, title="Confirmed short", style=shape.labeldown, location=location.abovebar,
+     color=color.new(color.red, 0), textcolor=color.white, size=size.small, text="SHORT?")
+
+// ----- context table (you read it, you decide) -----
+yesno(b) => b ? "✓" : "·"
+if showCtx and barstate.islast
+    var table t = table.new(position.top_right, 2, 8, border_width=1)
+    side = armedLong ? "LONG watch" : armedShort ? "SHORT watch" : "—"
+    table.cell(t, 0, 0, "HTF Radar", text_color=color.white, bgcolor=color.new(color.gray, 0))
+    table.cell(t, 1, 0, side, text_color=color.white,
+         bgcolor=armedLong ? color.new(color.green,0) : armedShort ? color.new(color.red,0) : color.new(color.gray,0))
+    table.cell(t, 0, 1, "Sup", text_color=color.green)
+    table.cell(t, 1, 1, na(nearestSup) ? "—" : str.tostring(nearestSup, format.mintick) + "  (" + str.tostring((close-nearestSup)/atr, "0.0") + " ATR)", text_color=color.green)
+    table.cell(t, 0, 2, "Res", text_color=color.red)
+    table.cell(t, 1, 2, na(nearestRes) ? "—" : str.tostring(nearestRes, format.mintick) + "  (" + str.tostring((nearestRes-close)/atr, "0.0") + " ATR)", text_color=color.red)
+    table.cell(t, 0, 3, "RSI", text_color=color.gray)
+    table.cell(t, 1, 3, str.tostring(rsi, "#.0"), text_color=color.gray)
+    table.cell(t, 0, 4, "struct", text_color=color.gray)
+    table.cell(t, 1, 4, armedShort ? yesno(structDn) : yesno(structUp), text_color=color.white)
+    table.cell(t, 0, 5, "mom", text_color=color.gray)
+    table.cell(t, 1, 5, armedShort ? yesno(momDn) : yesno(momUp), text_color=color.white)
+    table.cell(t, 0, 6, "stall", text_color=color.gray)
+    table.cell(t, 1, 6, armedShort ? yesno(stallDn) : yesno(stallUp), text_color=color.white)
+    table.cell(t, 0, 7, "ATR", text_color=color.gray)
+    table.cell(t, 1, 7, str.tostring(atr, format.mintick), text_color=color.gray)
+
+// ----- alerts (the whole point: tell you to LOOK) -----
+alertcondition(newSupTag,    title="Tag support",      message="HTF Radar: price tagged SUPPORT — look for a bounce read")
+alertcondition(newResTag,    title="Tag resistance",   message="HTF Radar: price tagged RESISTANCE — look for a rejection read")
+alertcondition(confirmLong,  title="Confirmed long",   message="HTF Radar: LONG confirmation (struct+mom) at support — your call")
+alertcondition(confirmShort, title="Confirmed short",  message="HTF Radar: SHORT confirmation (struct+mom) at resistance — your call")
