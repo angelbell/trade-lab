@@ -276,7 +276,17 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
   `pine/<asset>_<tf>_*.pine` (breakout Pines carry the KAMA gate: ON for BTC, optional for gold).
   **Validated candidates (NOT yet adopted — pending live-forward; real edge but size uncertain):**
   (a) gold 15M breakout — Pattern B + daily-SMA150 gate + extension-cap 8% + RR4 (`overfit_audit_extcap.py`:
-  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_breakout_extcap.pine`);
+  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_breakout_extcap.pine`).
+  ENHANCEMENT (2026-06-25, candidate-on-candidate): skip the 9–15 UTC "dead window" (London AM fix + pre-US-data
+  whipsaw) — the dropped trades are near-zero-EV deadweight (n122 meanR +0.04, IS −0.14), and removing them lifts
+  CAGR/DD 1.26→2.25 (bootstrap median 1.54), meanR +0.39→+0.57, makes ALL 8 years green (rescues the 2023 chop year),
+  IS≈OOS. Beats the CAGR/DD random-drop null at 100%ile and PLATEAUS (drop 9–12/9–15/10–14 all 95–100%ile, not a
+  spike). Window-search overfit audit (`research/audit_window.py`): DSR@57-windows = 1.00 (survives the
+  trial haircut), null p = 0.000 — BUT PBO via CSCV over the window-configs = 0.41 (better than noise 0.54, NOT robust
+  0.2) ⇒ the dead window is REAL but its exact boundary is partly noise: use a plateau window (~9–14), never an
+  IS-optimized one, and read the size as ~1.5 not 2.25. Same "real-but-size-uncertain" class as (b)/cycle-gate;
+  Pine carries it as an optional session-skip input (default OFF). The earlier finding that 15M internal filters all
+  LOSE the random-drop null still holds — this clears it precisely because it drops deadweight, not edge;
   (b) H17-S = gold ORB short-only + daily-SMA80-falling gate (`overfit_audit_h17s.py`: PBO 0.62 = regime-
   concentrated downtrend timer, dormant in bull years, low freq → size small; `pine/gold_1h_orb_short_downtrend.pine`).
   Both real-but-size-uncertain → live-forward decides; size conservatively (gold/BTC family ≤ parity).

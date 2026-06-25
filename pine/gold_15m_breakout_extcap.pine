@@ -10,6 +10,9 @@
 //    損切り   : L2（2波安値）。利確: 損切り幅 × RR（既定 1:4）。サイズ: 1トレード = 資金の riskPct%。
 //    日足ゲート: 前日確定 close > 上向き日足SMA のときだけ。extension-cap: 前日 close が
 //               日足SMA より extCap% 超で上なら見送り。
+//    セッション・スキップ（任意・既定OFF）: 指定時間帯（既定 9-15、ブローカー時計＝UTC）の
+//               ブレイクを見送る。フィックス/指標前の往復ビンタ帯でダマシ・ブレイク失敗が多い
+//               時間を外す用途。境界は厳密最適化せず広めのプラトー窓で使うこと。
 //
 //  no-lookahead: 日足は close[1]/sma[1]（前日確定）+ lookahead_off。extension も同じ前日値。
 //  運用上の注意 : 1%リスク上限・実DDはバックテストの1.5-2倍想定。スワップ未計上、終値計算→
@@ -40,6 +43,10 @@ useExtCap= input.bool(true, "Extension cap (skip when prior-day close > extCap% 
 extCap   = input.float(8.0, "Extension cap % above daily SMA (skip entries beyond this)", step = 0.5, minval = 0.0)
 useKama  = input.bool(false,"Daily KAMA-rising gate (optional alt; default OFF)")
 kamaLen  = input.int(14,    "Daily KAMA length", minval = 2)
+useSess  = input.bool(false,"Session skip (skip breakouts inside a dead-window hour range; default OFF)")
+sessTz   = input.string("UTC", "Session timezone (match the broker-server clock used for validation)")
+skipFrom = input.int(9,     "Skip window START hour (inclusive)", minval = 0, maxval = 23)
+skipTo   = input.int(15,    "Skip window END hour (exclusive)",   minval = 1, maxval = 24)
 
 atr   = ta.atr(atrLen)
 ema80 = ta.ema(close, trendLen)
@@ -71,6 +78,11 @@ dKama1 = request.security(syminfo.tickerid, "1D", f_kama(close, kamaLen)[1], loo
 dKama2 = request.security(syminfo.tickerid, "1D", f_kama(close, kamaLen)[2], lookahead = barmerge.lookahead_off)
 kamaUp = dKama1 > dKama2
 kamaOk = (not useKama) or kamaUp
+
+// SESSION SKIP (optional): block entries whose hour is inside [skipFrom, skipTo).
+hr      = hour(time, sessTz)
+inSkip  = hr >= skipFrom and hr < skipTo
+sessOk  = (not useSess) or (not inSkip)
 
 // ----- online ZigZag (ATR-threshold reversal) --------------------------------
 var int   zzDir = 1
@@ -119,7 +131,7 @@ if armed and (bar_index - armBar) > boWindow
 var float curStop = na
 var float curTgt  = na
 if armed and flat and bar_index > armBar and close > armH1
-    if dailyOk and kamaOk and extOk
+    if dailyOk and kamaOk and extOk and sessOk
         risk = close - armL2
         if risk > 0
             curStop := armL2
@@ -136,6 +148,7 @@ plot(useDaily ? dSmaNow : na, "Daily SMA (regime)", color = color.new(color.purp
 bgcolor(useDaily and not dailyUp ? color.new(color.red, 92) : na, title = "SMA regime down/flat (gated off)")
 bgcolor(useExtCap and not extOk ? color.new(color.yellow, 88) : na, title = "Extension too high (chase gated off)")
 bgcolor(useKama and not kamaUp ? color.new(color.orange, 90) : na, title = "Daily KAMA falling (gated off)")
+bgcolor(useSess and inSkip ? color.new(color.gray, 88) : na, title = "Session skip window (entries off)")
 plot(ema80, "Trend EMA", color = color.new(color.blue, 0), linewidth = 2)
 plot(armed ? armH1 : na, "Armed H1 (break line)", color = color.new(color.orange, 0),
      style = plot.style_linebr, linewidth = 1)

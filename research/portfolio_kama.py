@@ -2,7 +2,7 @@
 
 The lever for CAGR/DD > a single strategy = DIVERSIFICATION (low-correlation legs cut DD).
 This combines the validated legs -- gold 1H breakout (daily SMA gate), BTC 4H breakout
-(+ KAMA gate, the 2026-06 improvement), BTC 4H EMA pullback -- at a shared 1% risk and
+(+ KAMA gate, the 2026-06 improvement), BTC 4H EMA pullback (+ weekly cycle-phase gate) -- at a shared 1% risk and
 reports standalone vs combined CAGR/DD. Answers "can the book clear ~1.0 CAGR/DD?".
 """
 import os, sys
@@ -44,6 +44,18 @@ def kama_gate_btc(t):
     return t[at((km > km.shift(1)).shift(1), t.time)]
 
 
+def cycle_gate_pull(t, maxext=0.10, cyclelen=30):
+    """Weekly cycle-phase gate (ADOPTED 2026-06-21): keep BTC pullback entries only when
+    price is <= maxext above the weekly cyclelen-SMA (skip mature-bull chop; early-recovery
+    phase is where the pullback edge lives). Causal -- the weekly value is known only at week
+    close, so shift 1wk + ffill (cf. bear_short.weekly_bear, pine/btc_4h_ema_pullback.pine
+    cycleOK). This is the LEVEL gate ema_pullback's slope --gate-tf cannot express."""
+    d = resample(load_mt5_csv("data/vantage_btcusd_h1.csv"), "4h")
+    w30 = d["close"].resample("1W").last().rolling(cyclelen).mean().shift(1)
+    ceil = (1 + maxext) * w30.reindex(d.index, method="ffill")
+    return t[at(d["close"] <= ceil, t.time)]
+
+
 def get_legs():
     """The validated book legs as (time,R) frames. Reused by allocation/vol-target research."""
     gold = run_bo(resample(load_mt5_csv("data/vantage_xauusd_h1.csv"), "1h"),
@@ -54,6 +66,7 @@ def get_legs():
     btc_k = kama_gate_btc(btc)
     dbtc = resample(load_mt5_csv("data/vantage_btcusd_h1.csv"), "4h")
     pb = run_pb(dbtc, "long", SimpleNamespace(**{**PB, "csv": "x", "tf": "4h"}), 0.0)[["time", "R"]]
+    pb = cycle_gate_pull(pb)            # weekly cycle-phase gate (adopted 2026-06-21) -- the deployed leg
     return {"gold_bo": gold, "btc_bo_kama": btc_k, "btc_pull": pb}
 
 
