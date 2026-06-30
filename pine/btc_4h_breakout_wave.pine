@@ -14,7 +14,7 @@
 //  運用上の注意 : 1%リスク上限・実DDはバックテストの1.5-2倍想定。スワップ未計上、終値計算→
 //                 次足約定で1本ぶんの誤差。4H チャートに適用すること。
 // =============================================================================
-strategy("[BTC 4H] Breakout Wave Pattern-B (ZigZag RR2)",
+strategy("[BTC 4H] Swing Breakout (ZigZag)",
      overlay                 = true,
      initial_capital         = 10000,
      default_qty_type        = strategy.fixed,

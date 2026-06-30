@@ -14,7 +14,7 @@
 //  運用上の注意 : 1%リスク上限（2%でDD大）・実DDはバックテストの1.5-2倍想定。スワップ未計上、
 //                 終値計算→次足約定で1本ぶんの誤差。1H チャートに適用すること。
 // =============================================================================
-strategy("[GOLD 1H] Breakout Wave Pattern-B (ZigZag RR3 + daily gate)",
+strategy("[GOLD 1H] Swing Breakout (ZigZag)",
      overlay                 = true,
      initial_capital         = 10000,
      default_qty_type        = strategy.fixed,

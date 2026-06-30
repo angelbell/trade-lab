@@ -20,7 +20,7 @@
 //    - スプレッドは slippage(ティック)で近似（既定3≒0.3pip）。実スプレッドに合わせて。
 //    - 決済は SL か 反対シグナルのドテンのみ（利確指値は無い）。
 // =============================================================================
-strategy("[USDJPY M1] BB+RSI Mean-Reversion (SL ATR/Fixed)",
+strategy("[USDJPY M1] Mean Reversion",
      overlay                 = true,
      initial_capital         = 100000,
      default_qty_type        = strategy.percent_of_equity,   // robust default -> always fills

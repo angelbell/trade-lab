@@ -13,7 +13,7 @@
 //  運用上の注意 : DOWNTREND-ONLY なので強気相場では発火せず休眠・低頻度。サイズは小さく、
 //                 実弾前に forward-test すること。
 // ============================================================================
-strategy("[GOLD 1H] ORB Short + Daily-Downtrend Gate [H17-S]", overlay=true,
+strategy("[GOLD 1H] Session Breakout (Short)", overlay=true,
      default_qty_type=strategy.fixed, default_qty_value=1,
      initial_capital=10000, pyramiding=0,
      commission_type=strategy.commission.cash_per_order, commission_value=0,

@@ -14,7 +14,7 @@
 //  運用上の注意 : ペーパー/live-forward 候補（確定ブックではない）。サイズは小さく、BTC族は合計≤parity、
 //                 ロング主体で開始。既定値はチューニングしない。1%リスク上限・実DDは1.5-2倍想定。
 // =============================================================================
-strategy("[BTC 4H] Volatility-Expansion Breakout (scale-out 2R/4R)",
+strategy("[BTC 4H] Volatility Breakout",
      overlay                 = true,
      initial_capital         = 10000,
      default_qty_type        = strategy.fixed,

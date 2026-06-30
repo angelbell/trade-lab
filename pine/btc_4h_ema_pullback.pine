@@ -15,7 +15,7 @@
 //  no-lookahead: 確認足の終値→次足始値で約定。
 //  運用上の注意 : 1%リスク上限・実DDは1.5-2倍想定。BTC買いswap(~-35%/yr)は別途考慮。4H に適用。
 // =============================================================================
-strategy("[BTC 4H] EMA Pullback Continuation 80/21 RR1:3",
+strategy("[BTC 4H] EMA Pullback",
      overlay            = true,
      initial_capital    = 10000,
      default_qty_type   = strategy.fixed,
