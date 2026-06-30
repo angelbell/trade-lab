@@ -117,10 +117,10 @@ M5=1.02 / M15=0.99 / M30=0.99 / 1h=1.01 ＝**全イントラデイTFでブレイ
 - ゲートはDDを40.5→14.8に**半減**したが**PFは1.00に貼り付き＝ブレイクイーブンのまま**。2019チョップは日足ゲート後も赤。
 - **プラトー確認で罠を捕獲**: 日足SMA 100→PF**1.17** / 150→1.00 / 200→0.92 ＝ SMA100は単独スパイク（両隣崩壊）＝過学習。
   傾きk 5/10/20＝1.00/1.00/1.02で効果無し。→ 1.17に飛びつかず棄却（[[feedback-test-intuitions]]の実演）。
-- **WHY**: ゲートは「既存エッジを濃縮」してDDを下げるだけ。`gold_1h_breakout_wave`が黒いのは土台のウェーブ3構造に
+- **WHY**: ゲートは「既存エッジを濃縮」してDDを下げるだけ。`gold_1h_swing_breakout`が黒いのは土台のウェーブ3構造に
   本物のエントリーエッジがあるから。セッションORBはエントリーエッジ0（純ベータ）→濃縮対象が無い→DDは下がるが
   ブレイクイーブン止まり。＝H7「フィルタは無いエッジを創れない」の再実証。
-- **結論**: 順張りゴールドのコスト生存解＝土台構造(ウェーブ3)+日足ゲート+RR3を1H/4Hで（＝既存 `gold_1h_breakout_wave`）。
+- **結論**: 順張りゴールドのコスト生存解＝土台構造(ウェーブ3)+日足ゲート+RR3を1H/4Hで（＝既存 `gold_1h_swing_breakout`）。
   M15セッションスキャルはゲート付きでも「低リスクのブレイクイーブン」。**解像度を下げる方向にエッジは無い。地図を閉じる。**
 
 ## H17 — M15 ORB + 1H/4Hトレンド方向ゲート（ユーザー発案）★初の封印TEST権利獲得候補
@@ -1322,14 +1322,14 @@ tool: scalp_lab.py orb --dir short --daily-sma 80 --daily-slope-k 10 (--resample
  - **負け筋診断(`research/lowtf_gold_diag.py`, 674トレードを7軸で分解, IS/OOS別)**: 唯一クリーンな負け筋=**日足SMA150からの伸びすぎ(high extension): meanR+0.01(IS−0.22/OOS+0.09)**。他(曜日Mon=IS−0.50/OOS+0.46=ノイズ, KAMA/slope/vol=分離なし, 2023=チョップ年)。機構: イントラ15Mで日足が伸び切った所のブレイク飛びつき=出尽くし買い。
  - **ext-cap実装(`breakout_wave.py --ext-cap`)＋CAGR/DD random-drop null(`research/ext_cap_null.py`, pure-mask=no-overlap置換効果を分離)**: プラトー芯**cap7-9%が null を94-98%ile**で超える＝**本物の選別(n削りでない)**。stop幅/ER(61%ile=ソーター)と別物。cap5/12%はweak(78-84%)→既定は芯~8%, IS最適9%ピークは追わない。15M+ext8: CAGR/DD~1.5, DD26→17%, 410本＝**1H(1.59,208本)と並び頻度2倍**。
  - **overfit_audit(`research/overfit_audit_extcap.py`)**: **PBO=0.18(ノイズ0.48較正)＝ロバスト**(IS最良OOS+0.39, H17-S0.62/cycle0.53より遥か良)。DSR t3.27/skew+0.92, @25=0.90/@45=0.85/@100=0.76(低中試行生存,高で減衰)。bootstrap CAGR/DD+1.26 CI[0.36,2.46] null **p=0.001**。
-判定: **15M gold_bo+ext-cap=標準ゲート説得的クリアの新脚候補(最近で最強)。PBO0.18+7/8年緑+健全機構**。caveat: DSRは多重比較(7特徴診断+45グリッド)で0.76まで, 2023レジーム依存→保守サイズ+live-forward最終審判。次: Pine移植(gold_15m_breakout_extcap)→監視。tools: breakout_wave.py --ext-cap, lowtf_gold_diag.py, ext_cap_null.py, overfit_audit_extcap.py。
+判定: **15M gold_bo+ext-cap=標準ゲート説得的クリアの新脚候補(最近で最強)。PBO0.18+7/8年緑+健全機構**。caveat: DSRは多重比較(7特徴診断+45グリッド)で0.76まで, 2023レジーム依存→保守サイズ+live-forward最終審判。次: Pine移植(gold_15m_swing_breakout)→監視。tools: breakout_wave.py --ext-cap, lowtf_gold_diag.py, ext_cap_null.py, overfit_audit_extcap.py。
 
 ### 続報(2026-06-24): 15M+ext-cap脚のゲート頑健性 — KAMA不採用・daily SMA150最適・4H/8Hゲート劣る
 ユーザー問い3連を検定（ext-cap脚 RR4/cost0.0002 上で）。tools: breakout_wave.py に `--gate-kama`(KAMA-rising entry gate)・`--gate-tf`(ゲートTF可変)を追加。
 1. **KAMAでチョップ(2023)を削れるが「削りすぎ」=不採用**: ext8だけで既に2023は−16→−0(解決済)。+KAMA10: n354→182(−49%), meanR+0.39→+0.47(質↑)だが**totR+137→+86・CAGR/DD 17→11=半減**。KAMA14はOOS+0.13劣化(KAMA-VAL死再現)。典型「meanRソーター=CAGR/DDで負ける」+SMA150-slopeと二重計上で冗長。ユーザー直感「削りすぎ?」が的中。
 2. **daily SMA長=150が15M脚でも最適(1H流用でなく独立確認)**: meanR 100-200で+0.32〜0.39=プラトー(エッジ頑健)。**150がrisk-adj芯**: CAGR/DD 1.26(最良)・DD15%(最小)・IS+0.41≈OOS+0.36(最balanced)。短い=OOS高いがDD22-28%+IS偏り, 長い=IS>OOS劣化。slope-k: k10=1.26/k20=1.47(微上)だがk5凹む→1H揃えてk10既定。
 3. **4H/8Hゲート=試して daily に劣る**: 4H(SMA300/600)・8H(SMA300)は totR多い(+163-168)が**DD24-30%に膨張→CAGR/DD 0.76-0.94 < daily 1.26**。機構: レジーム・ゲートの仕事=マクロ(チョップ年除外)→"遅いdaily"必須, 速い4H/8Hはチョップ年を通す。daily が load-bearing。
-判定: **15M+ext-cap脚の確定config = daily SMA150+slope-k10ゲート / ext-cap8 / RR4 / KAMA無し / ゲートTF=daily**。全てプラトー/独立最適で、Pine(gold_15m_breakout_extcap.pine)のデフォルトと一致=Pine更新不要。残ツール: --gate-kama/--gate-tf(検定用,不採用)。
+判定: **15M+ext-cap脚の確定config = daily SMA150+slope-k10ゲート / ext-cap8 / RR4 / KAMA無し / ゲートTF=daily**。全てプラトー/独立最適で、Pine(gold_15m_swing_breakout.pine)のデフォルトと一致=Pine更新不要。残ツール: --gate-kama/--gate-tf(検定用,不採用)。
 
 ### 事前登録(2026-06-24): BTC 清算スイープ逆張り(ヒロピー「ヒートマップ」案) — Stage1 無料フロアテスト
 背景: ヒロピー動画2本=BTCで清算クラスタへ「磁石」のように吸い寄せ→スイープ→急反転を逆張り。主シグナル=清算ヒートマップ＋funding＋OI(テクニカルでなく需給)。9勝1敗/月200万=セールスファネル, n=10→証拠価値ゼロ, 仮説生成器扱い。
@@ -1369,7 +1369,7 @@ falsifier:
    - **PBO via CSCV over 窓config = 0.41**(noise 0.54, gap−0.13, IS-best OOS-Sharpe+0.35) → ⚠️ coinflipよりマシだがrobust(0.2)に遠い=「死に窓は実在するが正確な境界はノイズ」。
    - **bootstrap CI on CAGR/DD = [0.60/1.54/3.21], null p=0.000** → エッジ無しは強く棄却。但しCI広く**中央値1.54(2.25でない)**=サイズ不確実。
 機構(純マイニングでない): 9-15 UTC = ロンドンAMフィックス(10:30 UTC)+US指標前(13:30 UTC=8:30 ET)の往復ビンタ帯。ゴールドはフィックス・指標前後でダマシ集中=ブレイク失敗多発。
-判定: **既存validated候補(cycle-gate PBO0.53, H17-S PBO0.62)と同カテゴリ・数字は少し良い**(PBO0.41)。「死に窓を避ける」は信じてよい(DSR/null合格)が、**CAGR/DD 2.25は楽観点推定→実質~1.5を見込む**, **プラトー窓(9-14)で運用しIS最適境界に最適化しない**(PBO0.41の指示)。size保守(gold family≤parity), live-forward裁定。tools: research/audit_window.py, research/lowtf_gold_session_diag.py。Pine: gold_15m_breakout_extcap.pine にオプション・セッション・スキップ追加(default OFF)。
+判定: **既存validated候補(cycle-gate PBO0.53, H17-S PBO0.62)と同カテゴリ・数字は少し良い**(PBO0.41)。「死に窓を避ける」は信じてよい(DSR/null合格)が、**CAGR/DD 2.25は楽観点推定→実質~1.5を見込む**, **プラトー窓(9-14)で運用しIS最適境界に最適化しない**(PBO0.41の指示)。size保守(gold family≤parity), live-forward裁定。tools: research/audit_window.py, research/lowtf_gold_session_diag.py。Pine: gold_15m_swing_breakout.pine にオプション・セッション・スキップ追加(default OFF)。
 
 ### 判定(2026-06-26): btc_pull の「反応の質/管理」系調整は全滅 + RR4はノーゲートartifact + portfolio_kama stale修正
 ユーザー主導の探索スレッド。btc_pull(BTC 4H EMA押し目)の改善余地を一通り潰した。**全てfalsifyに倒れ、唯一見えたRR4も誤判定だった。**
@@ -1385,3 +1385,26 @@ falsifier:
 統一機構: **BTCは汚い(往復ビンタ多)→"締める/選別する"系は全部刈られるか正のEVを削る→緩いdip-low stop+RR3こそがエッジ。唯一の方向は"伸ばす"だが、cycle-gate済み集団ではRR3が既に頂点。** 「戻らず伸びるか」はエントリー時に未知で、見える勢い/形/速さはanti-predictive。
 **methodology教訓**: 調整は必ずdeployed config(cycle gate込み)で測る。本スレは誤って portfolio_kama の stale(ノーゲート)btc_pull をミラーしてた→RR4誤判定。気づきはユーザーの「ノイズゲートあった?」指摘。
 **アクション**: portfolio_kama.py のPB legに cycle_gate_pull() を追加(週足30SMA+10%上限, 因果shift1wk+ffill, cf. bear_short/Pine)。btc_pull単体 0.77→**1.97**(CLAUDE.md採用値と一致), G.bo+B.pull 1.88, gold↔pull年次corr −0.16→**−0.33**(=記載−0.34)。Pineは元から正しい(cycle gate default ON + RR3)、無変更。全試行tools: scratchpad(touch_reaction/candle_react/fastangle/angle_null/skipfirst/drop2nd/be_profit/milk/gated_rr)。
+
+### 判定(2026-06-26): gold intraday「戻し/反発」スキャル探索 — 単純MA全滅・分離器(20EMA上)は9年一貫だがtradeableでbeta以下 = エッジは執行精度(裁量)
+ユーザーの裁量手法（強い下落→下髭連発/Wボトム→戻し、20MAサポート、利確=戻り高値/大陰線高値/20EMA、勝率重視サブ）を一通り機械化して叩いた。長セッション、ほぼ全滅、だが境界線は明確になった。
+- **単純MA機械ルール=全滅(4通り)**: 20EMAフリップ meanR−0.14 / 20MAサポート→直近高値 −0.235 / 200MA反発 −0.30 / 20EMA角度=フラット。全部ヘビー負け。理由=**発火しすぎ(上昇中は20MA周辺が"壁紙"=2.5〜4万回)+健全な反発と崩壊の深押しを機械が分離できない**。200MA(稀=良いと予想)も外れ=深く200まで押す=トレンド崩壊サインで反発失敗(win19%)。
+- **5m exhaustion-bounce(下髭クラスター→直近大陰線の高値, full利確>分割/トレール)**: random-entryをin-sample 100%ile超え(=セットアップ非ランダム)だが、**フルヒストR建てでフラット(meanR+0.06/+0.095)**。"+$9.43/91%ile/min-target≥2改善"は全部**$の錯覚**=2026 goldが$4000で価格水増し+min-targetが大$の的を選ぶ。R建て(era-fair)なら直近窓(−0.013)も全史も~0。**教訓: 高値資産は$でなくRで測れ**。
+- **regimeゲート**: 上昇+0.135 / 下降−0.19(単調・機構=long需要→押しが買い戻される=唯一フラットでない実弾候補・**未validate=次回の宿題**)。ボラ三分位=非単調スパイク(中だけ+0.22)+**直近高ボラ2025が負け**=「最近高ボラだから効く」はfalsified。
+- **分離研究(bounce vs no-bounce, n=86,813ローカルロー, バリア+1.5/−0.3ATR)**: 唯一の頑健分離器=**above20(安値が20EMA上→bounce70% vs 下45%)。距離で単調、2018-2026の全9年で66-78%と完全一貫**(=regime-luckでない、構造的事実)。下ヒゲ=中(20EMA下の救済33→55%、上なら不要)。**ZigZag波形(HH/HL/cleanUp)=分離せず**(above20に冗長/微有害、above20内でcleanUpは73→65と微減=綺麗な成熟トレンドの押しはむしろ反転寄り)。
+- **BUT tradeable化で決定的に死亡**: above20-bounceを確認後エントリー+コスト= **meanR−0.145(全年赤、win57%)**、betaのnull(上昇中ランダムロング−0.069)に対し**1%ile=betaより悪い**。→9年一貫の70% bounce率はtradeableに残らない: **(a)安値ちょうどで入れない**(確認待ち=遅く高く買う→RR潰れ、70%→57%→負け)、**(b)選んでるのは浅い押し=トレンドbetaを"遅く高く"劣化させてるだけ**。
+- **結論: gold intraday 機械的「戻し/反発」=DEAD。頑健な"分類上の分離"≠tradeableエッジ**(entry-point + beta)。ユーザーの裁量エッジ=もし実在なら**"安値付近での執行精度"(機械が原理的に持てない、lookahead無しに"今が安値"は分からない)=実トレード記録でのみ測定可能**。
+- methodology: 早撃ち棄却せず9年一貫の分離器を最後(tradeable+beta null)まで追って正しい段階で殺せた=rigorが正しく機能。ユーザーのメタ要望=「全期間エッジは不要、条件付き(フィルタ)で良い」「すぐ棄却が怖い、有意義な情報を落とすな」「質問した方が速い時は質問」「次から僕(Claude)が分析をbreadth先行で駆動」。
+- tools: scratchpad多数(touch_reaction/candle_react/fastangle/skipfirst/drop2nd/be_profit/milk/gated_rr/reconcile/vol_split/trend_split/separability/sep_wave/char_20ema/tradeable_beta)。Pine: gold_5m_exhaustion_bounce(=R建てフラットの実験、非採用、コミットせず)。
+
+### 判定(2026-06-30): 200MA反発(touch-and-hold) — 非採用(機械レグ) / だが裁量チェックリストは完全裏取り
+ユーザー提案「200EMA反発確認→エントリー」を機械化、ユーザーの逐次指示(タッチして上で確定型, V字アタック除外, 重要水平線合流, RR固定せずフラクタル構造出口, EMA/SMA両方, アタック回数)を全部反映して叩いた。tools: research/ma200_bounce.py(全銘柄×TF素screen), ma200_bounce_quality.py(V除外+水平線+ランダム間引きnull), ma200_bounce_fractal.py(構造出口 target=戻り高値 / trail=フラクタル安値割れ), ma200_bounce_attack.py(EMA/SMA×アタック回数+CAGR/DD null), scratchpad/level_firsttouch.py(水平線オンリー)。
+- **素のベース=ほぼ全面死亡**: 全銘柄(gold/btc/usdjpy/eurusd)×TF(1h-1d)でmeanRマイナス, win31-40%≒RR2分岐33%。1h-4hは全死(上昇200MA周辺は壁紙=年中発火するノイズ)。USDJPY/EURUSDは壊滅(順張り=管理通貨で両側死, 既知)。生気はgold 8h/btc 1dのロングのみ(高TFスイング, 後ろ偏り)。**1h/4hはスキャルでない(ユーザー訂正)=これはスイング法**。
+- **出口は銘柄で逆**(構造出口, 固定RR撤廃): **gold=戻り高値ターゲット一択**(8h target meanR+0.40〜0.52, trailは-0.02に殺す=ゴールドは戻ると反落), **BTC=トレール寄り**(1d trail+0.33/win53%)=既知の「gold=ターゲット型, BTC=ランナー型」一致。構造R中央値3-5R(=戻り高値は損切の3-5倍先, 「伸ばす」はgeometry内蔵)。
+- **V字回避が一番効く(ユーザーの本命直感が正)**: 生きてるセルで一貫してISを持ち上げ(後ろ偏り是正)かつランダム間引きを抜ける(gold 4h target 93%ile IS-0.03→+0.13, gold 8h 87-88%ile, gold 1d 82%ile IS+0.14→+0.29)。**水平線フィルタはムラ**(死んだセルで98-100%ile跳ね, 生きてるgold 8hでは57%ile)。
+- **EMA vs SMA → SMAの勝ち**: 第1タッチに絞るとSMAだけがCAGR/DD random-drop nullを抜ける(gold 4h 91 / 8h **100** / 1d 83%ile), EMA#1は34-38%ile(抜けない)。3TFでSMA#1が揃ってnull抜け=**TFプラトー**。古典の200日線=SMAが正。
+- **アタック回数(ユーザー案)が病巣(lumpiness)を直す**: 反発確率は#1≫#2>#3+で明確減衰(#3以降は全部負け)。全タッチSMA(CAGR/DD-0.01)→第1タッチ(**+0.23**)。**この調査で初めてCAGR/DDのnull(本丸)を抜けた**(今までは全部meanR-nullまで)。**最良セル=gold 8h・200SMA・第1タッチ・V字回避・戻り高値target**: meanR+0.82, IS+0.44/OOS+0.98, CAGR/DD0.23, cddNull100%ile。BTCでは綺麗な減衰出ず=gold現象。
+- **でも本のレグには弱い+薄い**: gold-8h-SMA#1は**gold_boと独立(annual corr +0.07**, EMA全タッチ版は+0.62で被ってたがSMA#1で剥離)=非冗長。**だがn=30, CAGR/DD0.23は本レグ(1-2.6)に遠い**。本へ等リスク追加で2.63→0.84と破壊(低相関でもほぼゼロエッジのムラ脚を足すと薄める=総リスク不変則)。半サイズでも0.95。
+- **薄さの病巣・安価な解は尽きた**: (a)TF統合で稼ぐ→失敗(4h/1dフラットが8hを薄める, 統合0.08, DD17%)。(b)水平線オンリーで稼ぐ→失敗(さらに希少n5-41+全部死亡)=**効いてたのは200SMAの方(上向きMA第1タッチ=トレンドが新鮮), 水平線は本体でない**。第1タッチは本質的に希少。
+- **結論: 機械レグ=非採用。裁量チェックリスト=完全裏取り**(SMA(EMAでない)/第1タッチのみ(2回目以降減衰)/V字=落ちるナイフ回避/戻り高値で利確/ゴールドの高めTF)。ユーザーの逐次直感は全部データで正しかった。betaでなく(gold_bo独立)実エッジだが、size/頻度が機械化に足りない=裁量執行向き。
+- methodology: ユーザー駆動の逐次精錬(各割り込みで仕様追加)が、素のベース死亡→構造出口→V除外→SMA→アタック回数と段階的にCAGR/DD-nullまで到達させた良い例。「meanR上がった」で止めずCAGR/DD-null+独立性+本への寄与まで追って正しく非採用判定。

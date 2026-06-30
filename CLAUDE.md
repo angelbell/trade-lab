@@ -15,6 +15,13 @@ agreeing**, including the user's own and LLM-authored ones (Gemini's gold moment
 GPT's USDJPY pullback were both confident narratives that died on data). A good-looking
 backtest is a hypothesis, not a result. Never cheerlead a number — stress it first.
 
+## 🧪 YOUR ROLE — keep doing R&D; the user decides when to close
+結果が出たら、毎回**データから逆算した改善案を出して前進する**こと。「記録して閉じますか？」と訊いて手を止めない —
+**adopt / kill / close の判断はユーザーが行う**。NON-ADOPTED と測定できても、そこで止めず「**なぜ落ちたか＝病巣**」を
+特定し、それを直接叩く次の実験を提案・実行する（例：meanR は出るが CAGR/DD が低い → 病巣は entry でなく DD/lumpiness →
+no-overlap・頻度・分散バスケット・出口を攻める）。ログ追記や CLAUDE.md 更新は必要なら淡々と行い、研究の手は止めない。
+falsify は「殺して終わり」ではなく「殺し方から次の一手を生む」こと。
+
 ## Environment / how to run
 - `python` is NOT on PATH. Always use `.venv/bin/python`.
 - Data loader: `from src.data_loader import load_mt5_csv` (root scripts import directly;
@@ -276,7 +283,7 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
   `pine/<asset>_<tf>_*.pine` (breakout Pines carry the KAMA gate: ON for BTC, optional for gold).
   **Validated candidates (NOT yet adopted — pending live-forward; real edge but size uncertain):**
   (a) gold 15M breakout — Pattern B + daily-SMA150 gate + extension-cap 8% + RR4 (`overfit_audit_extcap.py`:
-  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_breakout_extcap.pine`).
+  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_swing_breakout.pine`).
   ENHANCEMENT (2026-06-25, candidate-on-candidate): skip the 9–15 UTC "dead window" (London AM fix + pre-US-data
   whipsaw) — the dropped trades are near-zero-EV deadweight (n122 meanR +0.04, IS −0.14), and removing them lifts
   CAGR/DD 1.26→2.25 (bootstrap median 1.54), meanR +0.39→+0.57, makes ALL 8 years green (rescues the 2023 chop year),
@@ -322,7 +329,7 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
 - Pre-registered hypothesis log: `docs/scalp_research_log.md`. Deep dives: `docs/findings_*.md`.
 - How to explore a NEW idea (raw hunch → KILL/LEAD, cheap-screen-first + prompt template):
   `docs/idea_exploration_playbook.md` (front end to the falsification checklist).
-- Pine strategies (live/charting): `pine/<asset>_<tf>_*.pine` (e.g. `gold_1h_breakout_wave.pine`).
+- Pine strategies (live/charting): `pine/<asset>_<tf>_*.pine` (e.g. `gold_1h_swing_breakout.pine`).
 - Engine split: research = Python (Vantage CSVs); see/alert = TradingView (Pine); live execution =
   Vantage MT5 (manual). Validate on Vantage; TV chart feed ≠ trade feed.
 - Data pipeline (WSL→Windows MT5 bridge): sibling repo `../mt5-mcp` auto-refreshes the Vantage
