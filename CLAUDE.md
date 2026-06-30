@@ -283,7 +283,7 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
   `pine/<asset>_<tf>_*.pine` (breakout Pines carry the KAMA gate: ON for BTC, optional for gold).
   **Validated candidates (NOT yet adopted — pending live-forward; real edge but size uncertain):**
   (a) gold 15M breakout — Pattern B + daily-SMA150 gate + extension-cap 8% + RR4 (`overfit_audit_extcap.py`:
-  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_swing_breakout.pine`).
+  PBO 0.18 / null p .001 / 7–8yr green; higher-freq, higher-DD sibling of gold_bo 1H; `pine/gold_15m_swing_breakout_zigzag.pine`).
   ENHANCEMENT (2026-06-25, candidate-on-candidate): skip the 9–15 UTC "dead window" (London AM fix + pre-US-data
   whipsaw) — the dropped trades are near-zero-EV deadweight (n122 meanR +0.04, IS −0.14), and removing them lifts
   CAGR/DD 1.26→2.25 (bootstrap median 1.54), meanR +0.39→+0.57, makes ALL 8 years green (rescues the 2023 chop year),
@@ -295,7 +295,7 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
   Pine carries it as an optional session-skip input (default OFF). The earlier finding that 15M internal filters all
   LOSE the random-drop null still holds — this clears it precisely because it drops deadweight, not edge;
   (b) H17-S = gold ORB short-only + daily-SMA80-falling gate (`overfit_audit_h17s.py`: PBO 0.62 = regime-
-  concentrated downtrend timer, dormant in bull years, low freq → size small; `pine/gold_1h_orb_short_downtrend.pine`).
+  concentrated downtrend timer, dormant in bull years, low freq → size small; `pine/gold_1h_session_breakout_short.pine`).
   Both real-but-size-uncertain → live-forward decides; size conservatively (gold/BTC family ≤ parity).
   Dead: gold 5m intraday (all families), USDJPY trend-following, every LLM-authored/marketplace
   indicator so far (ML SuperTrend, Kinematic-Physics, LeManChanel, **UT Bot Alerts**, **NWE
@@ -329,7 +329,7 @@ for k in 1.5 2.0 2.5; do .venv/bin/python breakout_wave.py --csv data/vantage_xa
 - Pre-registered hypothesis log: `docs/scalp_research_log.md`. Deep dives: `docs/findings_*.md`.
 - How to explore a NEW idea (raw hunch → KILL/LEAD, cheap-screen-first + prompt template):
   `docs/idea_exploration_playbook.md` (front end to the falsification checklist).
-- Pine strategies (live/charting): `pine/<asset>_<tf>_*.pine` (e.g. `gold_1h_swing_breakout.pine`).
+- Pine strategies (live/charting): `pine/<asset>_<tf>_*.pine` (e.g. `gold_1h_swing_breakout_zigzag.pine`).
 - Engine split: research = Python (Vantage CSVs); see/alert = TradingView (Pine); live execution =
   Vantage MT5 (manual). Validate on Vantage; TV chart feed ≠ trade feed.
 - Data pipeline (WSL→Windows MT5 bridge): sibling repo `../mt5-mcp` auto-refreshes the Vantage
