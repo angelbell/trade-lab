@@ -88,6 +88,20 @@ def build_signals(d: pd.DataFrame, args) -> tuple[pd.Series, pd.Series]:
         long_sig  = c < (mid - args.k * sd)   # oversold -> fade up
         short_sig = c > (mid + args.k * sd)    # overbought -> fade down
 
+    elif args.entry in ("fvg", "fvgfill"):
+        # 3-bar Fair Value Gap (LuxAlgo/SMC). Bullish FVG = gap between bar[-2]
+        # high and current low, confirmed by the middle bar closing above it.
+        h2, l2 = h.shift(2), l.shift(2)
+        bull = (l > h2) & (c.shift(1) > h2)
+        bear = (h < l2) & (c.shift(1) < l2)
+        if args.gap_min > 0:
+            bull &= ((l - h2) / h2 > args.gap_min)
+            bear &= ((l2 - h) / h > args.gap_min)
+        if args.entry == "fvg":           # CONTINUATION: trade the gap direction
+            long_sig, short_sig = bull, bear
+        else:                              # FILL/FADE: expect price back into the gap
+            long_sig, short_sig = bear, bull
+
     else:
         raise ValueError(f"unknown entry: {args.entry}")
 
@@ -171,10 +185,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description="MFE/MAE entry-edge screener")
     p.add_argument("--csv", required=True, help="MT5-exported H1 CSV")
     p.add_argument("--tf", default="1h", help="trade timeframe: 1h/4h/1d")
-    p.add_argument("--entry", default="breakout", choices=["breakout", "swing", "meanrev"])
+    p.add_argument("--entry", default="breakout", choices=["breakout", "swing", "meanrev", "fvg", "fvgfill"])
     p.add_argument("--side", default="long", choices=["long", "short", "both"])
     p.add_argument("--period", type=int, default=55, help="breakout/meanrev lookback")
     p.add_argument("--k", type=float, default=2.0, help="meanrev band width (std)")
+    p.add_argument("--gap-min", type=float, default=0.0, help="fvg min gap size (fraction, 0=off)")
     p.add_argument("--htf", default="4h", help="swing structure timeframe")
     p.add_argument("--fractal-n", type=int, default=3, help="swing pivot bars each side")
     p.add_argument("--sma", type=int, default=0, help="same-TF SMA regime filter (0=off)")

@@ -197,16 +197,22 @@ def run(d: pd.DataFrame, args) -> None:
     # is rising. shift(1)+ffill = no lookahead. (Tests whether KAMA filters chop years.)
     kreg = None
     if getattr(args, "gate_kama", 0) > 0:
-        dck = d["close"].resample("1D").last().dropna()
+        dck = d["close"].resample(getattr(args, "gate_kama_tf", "1D")).last().dropna()
         kmg = kama_adaptive(dck, args.gate_kama)
         krise = (kmg > kmg.shift(1)).shift(1)
         kreg = krise.reindex(d.index, method="ffill").fillna(False).values
+        gtf2 = getattr(args, "gate_kama_tf2", "")
+        if gtf2:                                     # AND a second, slower KAMA gate: the fast
+            dck2 = d["close"].resample(gtf2).last().dropna()   # gate times entries, the slow one
+            kmg2 = kama_adaptive(dck2, args.gate_kama)         # vetoes bear-rally whipsaws
+            krise2 = (kmg2 > kmg2.shift(1)).shift(1)
+            kreg = kreg & krise2.reindex(d.index, method="ffill").fillna(False).values
 
     # regime-flip EXIT (adaptive): bail a long at the bar CLOSE if the prior completed
     # daily KAMA has turned DOWN (regime against the long). shift(1)+ffill = no lookahead.
     against = None
-    if args.exit_kama > 0:
-        dc2 = d["close"].resample("1D").last().dropna()
+    if getattr(args, "exit_kama", 0) > 0:
+        dc2 = d["close"].resample(getattr(args, "exit_kama_tf", "1D")).last().dropna()
         km = kama_adaptive(dc2, args.exit_kama)
         falling = (km < km.shift(1)).shift(1)
         against = falling.reindex(d.index, method="ffill").fillna(False).values
@@ -265,10 +271,11 @@ def run(d: pd.DataFrame, args) -> None:
             # Elliott leg label: is H1 (this setup's wave-1 high) ALREADY a higher-high
             # vs the prior swing high? No => first impulse off a base/downtrend (wave-3).
             # Yes => continuation leg in an established uptrend (wave-5+).
-            if args.wave != "all":
+            wave = getattr(args, "wave", "all")
+            if wave != "all":
                 prevH = sw[t - 3][2] if (t - 3 >= 0 and sw[t - 3][3] == +1) else None
                 is_cont = prevH is not None and pH1 > prevH
-                if (args.wave == "3" and is_cont) or (args.wave == "5" and not is_cont):
+                if (wave == "3" and is_cont) or (wave == "5" and not is_cont):
                     continue
             if es is not None and not np.isnan(es[cL2]) and pH1 < es[cL2]:
                 continue
@@ -320,6 +327,12 @@ def run(d: pd.DataFrame, args) -> None:
             e_i = first_breakout(pHt, cHt + 1)
             if e_i is None:
                 continue
+            if reg is not None and not reg[e_i]:     # same regime gates as Pattern B
+                continue
+            if ext_arr is not None and not np.isnan(ext_arr[e_i]) and ext_arr[e_i] > args.ext_cap:
+                continue
+            if kreg is not None and not kreg[e_i]:
+                continue
             e = c[e_i]
             if args.sl_mode == "line":                # video A: just below the broken line
                 stop = pHt - args.sl_buf * a[e_i]
@@ -351,55 +364,121 @@ def run(d: pd.DataFrame, args) -> None:
         seen.add(en[0]); uniq.append(en)
     entries = uniq
 
-    # evaluate: one position at a time, forward to stop / target / timeout
+    # evaluate: up to max_pos concurrent positions (default 1 = the historical single-slot
+    # busy_until behaviour, bit-identical), forward to stop / target / timeout. Each position
+    # risks its own 1R; concurrency shows up in the R-sum equity as clustered wins/losses.
     trades, rr_real = [], []
-    busy_until = -1
+    open_x = []                                        # exit bars of currently-open positions
+    maxpos = max(1, int(getattr(args, "max_pos", 1)))
+    pf = getattr(args, "pullback_frac", 0.0)          # 0 = market entry (unchanged); >0 = pullback-limit
     for (i, e, stop, tgt) in entries:
-        if i <= busy_until:
+        open_x = [x for x in open_x if x >= i]        # a signal ON an exit bar stays excluded
+                                                      # (matches the historical busy_until <=)
+        if len(open_x) >= maxpos:
             continue
-        risk = e - stop
-        reward = tgt - e
-        exit_j = min(i + args.fwd, len(c) - 1)
+        # SPLIT execution (--exec-split with --pullback-frac): half the position at market
+        # (plain confirmed-close entry, never misses the runner), half at the pullback limit
+        # (cheap fill when the pullback comes). Both halves keep the market stop/target
+        # levels; each half risks 0.5R on its own stop distance. Recorded risk = harmonic
+        # combination so post-hoc absolute cost stays spread/risk. Not combinable with
+        # tp1_frac scale-out. Limit-leg fill-bar semantics mirror the pure pullback path.
+        if pf > 0.0 and getattr(args, "exec_split", 0):
+            risk_m = e - stop
+            if risk_m <= 0:
+                continue
+            lim = e - pf * risk_m
+
+            def _walk(px, sb):
+                rk = px - stop
+                for j in range(sb + 1, min(sb + 1 + args.fwd, len(c))):
+                    if l[j] <= stop: return -1.0, j
+                    if h[j] >= tgt:  return (tgt - px) / rk, j
+                    if against is not None and against[j]:
+                        return (c[j] - px) / rk, j
+                rj = min(sb + args.fwd, len(c) - 1)
+                return (c[rj] - px) / rk, rj
+
+            Rm, xm = _walk(e, i)
+            Rm -= args.cost / risk_m * e
+            fj = None
+            for j in range(i + 1, min(i + 1 + args.fwd, len(c))):
+                if h[j] >= tgt: break                 # ran to target first = limit missed
+                if l[j] <= lim: fj = j; break
+            R, exit_j, w_risk = 0.5 * Rm, xm, 2.0 * risk_m
+            if fj is not None:
+                risk_l = lim - stop
+                Rl, xl = _walk(lim, fj)
+                Rl -= args.cost / risk_l * lim
+                R += 0.5 * Rl
+                exit_j = max(xm, xl)
+                w_risk = 1.0 / (0.5 * (1.0 / risk_m + 1.0 / risk_l))
+            hold = (d.index[exit_j] - d.index[i]).total_seconds() / 86400.0
+            if args.swap_pct > 0:
+                R -= (args.swap_pct / 100.0) * (e / risk_m) * hold
+            trades.append((d.index[i], R, hold, w_risk, e, Rm, 1.0 if fj is not None else 0.0))
+            rr_real.append((tgt - e) / risk_m)
+            open_x.append(exit_j)
+            continue
+        # PULLBACK-LIMIT execution (validated lever): keep the structural stop AND the fixed
+        # target at their MARKET levels, but lower the entry to e-pf*(e-stop). Fill on the
+        # pullback touch BEFORE the target is reached (else MISSED = the runaway winner is
+        # skipped = adverse selection modelled). Realized risk shrinks -> effective RR rises.
+        e_px, e_bar = e, i
+        if pf > 0.0:
+            lim = e - pf * (e - stop)
+            fj = None
+            for j in range(i + 1, min(i + 1 + args.fwd, len(c))):
+                if h[j] >= tgt: break                 # ran to target first = missed
+                if l[j] <= lim: fj = j; break
+            if fj is None:
+                continue
+            e_px, e_bar = lim, fj
+        risk = e_px - stop
+        reward = tgt - e_px
+        if risk <= 0:
+            continue
+        exit_j = min(e_bar + args.fwd, len(c) - 1)
         R = None
         s_frac = getattr(args, "tp1_frac", 0.0)
         if s_frac > 0:
             # SCALE-OUT: bank s_frac at tp1 (RR=tp1_rr), then run the rest to the final tgt,
             # moving the stop to break-even after tp1 if tp1_be. stop checked first on same-bar
             # conflict (conservative). Total R = sum of fraction*R-multiple of each leg.
-            tp1 = e + getattr(args, "tp1_rr", 1.0) * risk
+            tp1 = e_px + getattr(args, "tp1_rr", 1.0) * risk
             be_move = getattr(args, "tp1_be", 1)
             realized, rem, cur_stop, tp1_hit = 0.0, 1.0, stop, False
-            for j in range(i + 1, min(i + 1 + args.fwd, len(c))):
+            for j in range(e_bar + 1, min(e_bar + 1 + args.fwd, len(c))):
                 if l[j] <= cur_stop:
-                    realized += rem * ((cur_stop - e) / risk); R = realized; exit_j = j; break
+                    realized += rem * ((cur_stop - e_px) / risk); R = realized; exit_j = j; break
                 if not tp1_hit and h[j] >= tp1:
-                    realized += s_frac * ((tp1 - e) / risk); rem -= s_frac; tp1_hit = True
-                    if be_move: cur_stop = e
+                    realized += s_frac * ((tp1 - e_px) / risk); rem -= s_frac; tp1_hit = True
+                    if be_move: cur_stop = e_px
                 if h[j] >= tgt:
                     realized += rem * (reward / risk); R = realized; exit_j = j; break
                 if against is not None and against[j]:
-                    realized += rem * ((c[j] - e) / risk); R = realized; exit_j = j; break
+                    realized += rem * ((c[j] - e_px) / risk); R = realized; exit_j = j; break
             if R is None:
-                realized += rem * ((c[exit_j] - e) / risk); R = realized
+                realized += rem * ((c[exit_j] - e_px) / risk); R = realized
         else:
-            for j in range(i + 1, min(i + 1 + args.fwd, len(c))):
+            for j in range(e_bar + 1, min(e_bar + 1 + args.fwd, len(c))):
                 if l[j] <= stop: R = -1.0; exit_j = j; break
                 if h[j] >= tgt:  R = reward / risk; exit_j = j; break
                 if against is not None and against[j]:        # regime turned down -> bail at close
-                    R = (c[j] - e) / risk; exit_j = j; break
+                    R = (c[j] - e_px) / risk; exit_j = j; break
             if R is None:
-                R = (c[exit_j] - e) / risk
-        R -= args.cost / risk * e
-        hold = (d.index[exit_j] - d.index[i]).total_seconds() / 86400.0
+                R = (c[exit_j] - e_px) / risk
+        R -= args.cost / risk * e_px
+        hold = (d.index[exit_j] - d.index[e_bar]).total_seconds() / 86400.0
         if args.swap_pct > 0:
-            R -= (args.swap_pct / 100.0) * (e / risk) * hold
-        trades.append((d.index[i], R, hold))
+            R -= (args.swap_pct / 100.0) * (e_px / risk) * hold
+        trades.append((d.index[e_bar], R, hold, risk, e_px, R, 1.0))
         rr_real.append(reward / risk)
-        busy_until = exit_j
+        open_x.append(exit_j)
 
     if not trades:
         print("  no entries"); return None
-    t = pd.DataFrame(trades, columns=["time", "R", "hold"]); t["y"] = t["time"].dt.year
+    t = pd.DataFrame(trades, columns=["time", "R", "hold", "risk", "e_px", "r_mkt", "filled"])
+    t["y"] = t["time"].dt.year
     if getattr(args, "dump_trades", False):   # clean CSV only (for per-trade slice analysis)
         print("entry_time,R,hold")
         for _, r in t.iterrows():
@@ -468,6 +547,21 @@ def main() -> None:
                    help="optional gate: require wave-1 high above this EMA (0=off)")
     p.add_argument("--bo-window", type=int, default=20,
                    help="max bars after wave-2 low to wait for the H1 breakout")
+    p.add_argument("--pullback-frac", type=float, default=0.0,
+                   help="pullback-limit execution: keep the structural stop+fixed target, but "
+                        "enter on a limit at e-frac*(e-stop) (0=market; ~0.25-0.3 = validated lever). "
+                        "runaway breaks that never pull back are skipped (adverse selection).")
+    p.add_argument("--max-pos", type=int, default=1,
+                   help="max concurrent positions (default 1 = historical single-slot behaviour); "
+                        "each position risks its own 1R, so account risk stacks on overlap")
+    p.add_argument("--exec-split", type=int, default=0,
+                   help="with --pullback-frac: 1 = half position at market + half at the "
+                        "pullback limit (no missed runners); stop/target stay at market levels")
+    p.add_argument("--gate-kama-tf", default="1D",
+                   help="resample TF for the --gate-kama KAMA-rising gate (default 1D)")
+    p.add_argument("--gate-kama-tf2", default="",
+                   help="optional second KAMA-rising gate TF, ANDed with the first "
+                        "(e.g. fast 4h entry-timing gate AND slow 1D bear-market veto)")
     p.add_argument("--retest", type=int, default=0,
                    help="bolt-on: require a pullback-retest+reclaim of the broken level within "
                         "this many bars before entry (0=off, enter on the break itself)")
@@ -479,6 +573,8 @@ def main() -> None:
                    help="also require the daily SMA to be rising over k days (0=off)")
     p.add_argument("--exit-kama", type=int, default=0,
                    help="adaptive regime-flip EXIT: bail a long at close when daily KAMA(this) turns down (0=off)")
+    p.add_argument("--exit-kama-tf", default="1D",
+                   help="resample rule for the exit-KAMA series (e.g. 240min; default 1D)")
     p.add_argument("--tp-mode", default="measured", choices=["measured", "rr", "nexthigh"],
                    help="measured=project wave-1 length off wave-2 low (B); "
                         "rr=fixed reward:risk; nexthigh=2nd swing-high overhead (A, video)")
