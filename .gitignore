@@ -12,6 +12,14 @@ scratch/
 .DS_Store
 *Zone.Identifier*
 
+# --- scratchpad: keep the .py evidence scripts (cited by docs/verified_findings.md),
+#     ignore run outputs / images / cached data (regenerable by re-running) ---
+scratchpad/*.txt
+scratchpad/*.out
+scratchpad/*.err
+scratchpad/*.csv
+scratchpad/*.png
+
 # --- local-only config (never publish secrets) ---
 *.env
 .env
@@ -19,4 +27,7 @@ secrets.*
 config.local.*
 
 # --- local Claude Code config (machine-local; never publish) ---
-.claude/
+# exception: skills/ and agents/ are part of the research workflow -> tracked
+.claude/*
+!.claude/skills/
+!.claude/agents/
