@@ -71,7 +71,9 @@ Most tools report `n, win%, PF, meanR, totR, IS/OOS, maxDD` and `--peryear`. Cos
    **CAGR/DD** random-drop null (not just meanR).
 8. **Feed-dependence** — validate on Vantage, not the TV chart feed.
 9. **Beta check** — long-only in a secular bull = beta; demand short side / another instrument.
-10. **No lookahead** — HTF via shift/confirm-later; next-bar-open fill; intrabar SL/TP.
+10. **No lookahead** — HTF via shift/confirm-later; next-bar-open fill; intrabar SL/TP. **外部データ(UTC)を
+    Vantage CSV(ブローカー時刻=EET/EEST=UTC+2/+3)に結合する時は必ずtz変換**（`tz_convert("Europe/Riga")`）。
+    素で突き合わせると窓の後半が未来になる（2026-07-12にフロー退出の🟢判定3件がこれで死んだ）。検算＝リターン相関のラグ探索。
 11. **Log every try (incl. failures)** — multiple comparisons raise the bar. Don't loop until good results.
 
 Workflow: mechanize faithfully → full history all-signals `--peryear` → checklist → not-one-era-beta →

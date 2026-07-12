@@ -18,13 +18,15 @@
 //    損切/利確: 損切=L2（価格固定）、利確=e+RR*risk（価格固定、既定RR4）。指値を下げるぶん
 //               実効RRは膨らむ（reward↑/risk↓）。サイズ: 1トレード=資金 riskPct%（risk=lim-L2）、
 //               BTC最小0.01ロット刻みに切り上げ（リスク許容5%内、取りこぼし回避）。
-//    任意ラチェット（既定OFF・BTCのDD管理用）: 含み益が TP2*u に届いたら損切を TP1*u へ引き上げ
-//               （u=lim-L2）。早利確はせず全量を最終targetまで走らせる＝runnerは削らず、TP2到達後に
-//               往復ビンタで負けに戻る分だけ救う。gold では有害・BTC 固有の用途。
+//    ラチェット : 含み益が TP2*u に届いたら損切を TP1*u へ引き上げ（u=lim-L2）。早利確はせず全量を
+//               最終targetまで走らせる＝runnerは削らず、TP2到達後に往復ビンタで負けに戻る分だけ救う。
+//               DDを削るのが目的（リターンは微減）。gold では有害・BTC 固有の用途。
 //
 //  no-lookahead: KAMAゲート/PDH は [1]（前バー/前日の確定値）+ lookahead_off。終値計算→次足約定で1本ぶんの誤差。
 //  運用上の注意 : long-only。1%リスク上限・実DDはバックテストの1.5-2倍想定。**BTCのスプレッド/
 //                 スワップは別途確認**（tight でないが約定コストは要検証）。15M チャートに適用。
+//                 出来高フロー（Binanceのテイカー比/上下出来高比）による退出は検証の結果 **不採用**:
+//                 効果に見えたものは時刻ずれ由来の先読みだった（docs/findings/s02_exits.md）。
 // =============================================================================
 strategy("[BTC 15M] Swing Breakout (ZigZag) + pullback-limit",
      overlay                 = true,
@@ -51,8 +53,8 @@ kamaTf   = input.timeframe("D", "KAMA gate timeframe (D = slow/defensive, 240 = 
 kamaLen  = input.int(14,     "KAMA length", minval = 2)
 usePdh   = input.bool(true,  "PDH sizing (full size only above prior-day high)")
 pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks)", step = 0.25, minval = 0.0, maxval = 1.0)
-useRatch = input.bool(false, "TP2->TP1 stop ratchet (BTC DD-management; default OFF)")
-tp2Rr    = input.float(3.0,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
+useRatch = input.bool(true,  "TP2->TP1 stop ratchet (BTC DD-management)")
+tp2Rr    = input.float(3.5,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
 ratToRr  = input.float(2.0,  "Ratchet stop-to level TP1 (in R; 0 = breakeven)", step = 0.5, minval = 0.0)
 showZZ   = input.bool(true,  "ZigZag: draw the swing line", group = "ZigZag drawing")
 zzCol    = input.color(color.new(color.teal, 0), "ZigZag color", group = "ZigZag drawing")
@@ -186,18 +188,19 @@ if pend and flat
 
 // on fill: lock the exit levels
 if strategy.position_size > 0 and pend
-    pend    := false
-    curStop := pStop
-    curTgt  := pTgt
-    ratched := false
+    pend     := false
+    curStop  := pStop
+    curTgt   := pTgt
+    ratched  := false
 
-// optional ratchet: once high >= lim + tp2Rr*u, raise stop to lim + ratToRr*u
+// stop / target stay live intrabar (they take precedence over the close-based flow exit)
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
+
+// ratchet: once high >= lim + tp2Rr*u, raise the stop to lim + ratToRr*u (effective next bar)
 if strategy.position_size > 0 and useRatch and not ratched and high >= pLim + tp2Rr * pU
     curStop := pLim + ratToRr * pU
     ratched := true
-
-if strategy.position_size > 0
-    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
 
 // ----- plots -----------------------------------------------------------------
 bgcolor(useKama and not kamaUp ? color.new(color.orange, 90) : na, title = "KAMA gate falling (gated off)")
