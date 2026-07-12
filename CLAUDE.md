@@ -100,9 +100,12 @@ for live, 1% risk default, never >3%) → portfolio. Compare on **CAGR/DD**, not
 - **Dead の一覧と経緯は `docs/structural_priors.md` と `docs/verified_findings.md`** — 再テスト前に必ず照合。
 
 ## Where things live
-- **検証済み台帳（回す前に見る・確定したら追記）: `docs/verified_findings.md`**
-- 提案バックログ（機構/検証順/合格基準/死に方）: `docs/proposals.md` · 探索の入口: `docs/idea_exploration_playbook.md`
-- 事前登録ログ: `docs/scalp_research_log.md` · 深掘り: `docs/findings_*.md` · 法則の詳細: `docs/structural_priors.md`
+- **検証済み台帳（回す前に見る・確定したら追記）: `docs/verified_findings.md`＝1行索引、本文は `docs/findings/*.md`。
+  検索は `grep -r <語> docs/verified_findings.md docs/findings/`**
+- 提案バックログ（機構/検証順/合格基準/死に方）: `docs/proposals.md`（決着分の本文は `proposals_archive.md`）·
+  探索の入口: `docs/idea_exploration_playbook.md`
+- 事前登録ログ: `docs/scalp_research_log.md`（過去試行は `scalp_research_log_archive.md`）· 深掘り: `docs/findings_*.md` ·
+  法則の詳細: `docs/structural_priors.md`
 - 工程表スキル: `.claude/skills/edge-rd/SKILL.md` · 計測係: `.claude/agents/measure.md`
 - Pine strategies: `pine/<asset>_<tf>_*.pine`（機能コメントのみ、研究履歴は書かない）
 - Engine split: research = Python (Vantage CSVs); see/alert = TradingView (Pine); live = Vantage MT5 (manual)。
