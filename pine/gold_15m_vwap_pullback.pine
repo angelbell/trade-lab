@@ -1,0 +1,98 @@
+//@version=5
+// =============================================================================
+//  [GOLD 15M]  VWAP Pullback (anti-knife) -- long-only
+//
+//  ロジック（上昇トレンド中の"売られすぎ押し目 → VWAP奪回"を買う。純逆張りでなく順張り押し目）:
+//    参照線     : セッションVWAP（UTC日ごとにリセット、hlc3×出来高の累積）。皆が見る当日の公正価値。
+//    セットアップ: 終値がVWAPを「下抜け」＋RSI(14)<40（売られすぎ）＋ADX(14)<25（レンジ）
+//                 ＋日足ゲート（前日確定 close > 日足SMA150＝上昇トレンド）。
+//    確認       : 下抜けから confirmBars 本以内に、足が「終値でVWAPを奪回」（close>VWAP）し、
+//                 かつその足が自分のレンジ上位（終値位置 clPos>=clThr、既定0.85）で引ける
+//                 ＝強い奪回。弱い奪回（下ヒゲ＝ダマシ）を除外＝"落ちるナイフ"を弾く核。
+//    エントリ   : 確認足の次足始値でロング。損切: entry-1.5×ATR。利確: entry+5×ATR（固定、伸ばす）。
+//                 サイズ: 1トレード = 資金の riskPct%。同時保有は1つ。
+//
+//  no-lookahead: 日足は close[1]/sma[1]（前日確定）+ lookahead_off。VWAPは当日確定値のみ。
+//                終値計算→次足約定で1本ぶんの誤差。
+//  運用上の注意 : 15Mチャートに適用。実DDはバックテストの1.5-2倍想定。頻度は薄い（低TF・高選別）。
+//                 スプレッド/スワップ未計上。エッジは gold固有（他銘柄へ素朴転用は不可）。
+// =============================================================================
+strategy("[GOLD 15M] VWAP Pullback (anti-knife)",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.0)
+
+// ----- inputs ----------------------------------------------------------------
+rsiLen      = input.int(14,   "RSI length", minval = 1)
+rsiThr      = input.float(40, "RSI < threshold (oversold pullback)", step = 1)
+adxLen      = input.int(14,   "ADX length", minval = 1)
+adxThr      = input.float(25, "ADX < threshold (ranging only)", step = 1)
+atrLen      = input.int(14,   "ATR length", minval = 1)
+slAtr       = input.float(1.5,"Stop = entry - x*ATR",  step = 0.1, minval = 0.1)
+tpAtr       = input.float(5.0,"Target = entry + x*ATR (fixed, let winners run)", step = 0.5, minval = 0.5)
+confirmBars = input.int(3,    "Reclaim window (bars after down-cross)", minval = 1)
+clThr       = input.float(0.85,"Anti-knife: reclaim-candle close position >= (0=low,1=high)", step = 0.05, minval = 0.0, maxval = 1.0)
+dSmaLen     = input.int(150,  "Daily SMA length (uptrend gate)", minval = 1)
+riskPct     = input.float(1.0,"Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
+
+atr = ta.atr(atrLen)
+rsi = ta.rsi(close, rsiLen)
+[_dip, _dim, adx] = ta.dmi(adxLen, adxLen)
+flat = strategy.position_size == 0
+
+// ----- session VWAP, UTC-day anchored (matches the research feed) -------------
+isNewDay = na(time[1]) or (dayofmonth(time, "UTC") != dayofmonth(time[1], "UTC"))
+var float cumPV = 0.0
+var float cumV  = 0.0
+if isNewDay
+    cumPV := 0.0
+    cumV  := 0.0
+cumPV := cumPV + hlc3 * volume
+cumV  := cumV + volume
+vwap = cumV > 0 ? cumPV / cumV : hlc3
+
+// ----- daily uptrend gate: prior COMPLETED day's close > daily SMA (no lookahead)
+dSma    = request.security(syminfo.tickerid, "1D", ta.sma(close, dSmaLen)[1], lookahead = barmerge.lookahead_off)
+dClose1 = request.security(syminfo.tickerid, "1D", close[1],                  lookahead = barmerge.lookahead_off)
+dailyUp = dClose1 > dSma
+
+// ----- setup: VWAP down-cross while oversold + ranging + uptrend --------------
+downCross = ta.crossunder(close, vwap)
+armCond   = downCross and rsi < rsiThr and adx < adxThr and dailyUp
+var int armBar = na
+if armCond
+    armBar := bar_index
+
+elapsed  = na(armBar) ? na : (bar_index - armBar)
+inWindow = not na(elapsed) and elapsed >= 1 and elapsed <= confirmBars
+
+// ----- confirm: strong reclaim of VWAP (anti-knife) --------------------------
+clPos   = (high - low) > 0 ? (close - low) / (high - low) : 0.5
+reclaim = close > vwap and clPos >= clThr
+fire    = inWindow and reclaim and flat
+
+var float curStop = na
+var float curTgt  = na
+if fire
+    armBar  := na
+    curStop := close - slAtr * atr
+    curTgt  := close + tpAtr * atr
+    risk = close - curStop
+    if risk > 0
+        qty = math.ceil((strategy.equity * riskPct) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
+        strategy.entry("L", strategy.long, qty = qty)
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
+
+// ----- plots -----------------------------------------------------------------
+plot(vwap, "Session VWAP (UTC-day)", color = color.new(color.orange, 0), linewidth = 2)
+plot(dSma, "Daily SMA (uptrend gate)", color = color.new(color.purple, 0), linewidth = 1)
+bgcolor(dailyUp ? na : color.new(color.red, 92), title = "Daily downtrend (gated off)")
+plotshape(fire, title = "Entry", style = shape.triangleup, location = location.belowbar,
+     color = color.lime, size = size.tiny)

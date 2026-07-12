@@ -1,0 +1,217 @@
+//@version=5
+// =============================================================================
+//  [BTC 15M]  Breakout Wave -- Pattern B (3rd-wave) -- ZigZag / RR4
+//             + daily-KAMA gate + PULLBACK-LIMIT entry.  15M chart, long-only.
+//
+//  ロジック（手法B = 第3波ブレイク、押し目指値執行）:
+//    波の検出 : オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）。
+//    骨格     : L0(安)->H1(高=1波天井)->L2(安) で L2>L0（higher low）。H1>80EMA（任意ゲート）。
+//    レジーム : KAMA(14)が前バーまで上向き（ER自己適応＝BTCのボラに合う。SMA固定ゲートは不可）。
+//               ゲートTFは入力（D=遅い/守り、240=速い/攻め。速い方はベアラリーに騙されやすい）。
+//    トリガ   : L2 確定後、足が H1 を「終値で」上抜け＋日足KAMA上向きなら "武装"。
+//    エントリ : 成行で飛び乗らず、ブレイク終値 e・損切 L2・risk=e-L2 に対し
+//               lim = e - frac*risk（既定 frac0.3）に指値。押しが lim に来たら約定。
+//               来る前に target へ走り抜けたら見送り（＝強ブレイクの取り逃し＝逆選択の税）。
+//    玉サイズ : 前日高値(PDH)との位置で二段。ブレイク終値が PDH より上（新値圏＝頭上に
+//               前日の売り物が無い）ならフル玉、前日レンジ内なら insideW 倍（既定0.5、
+//               0にするとレンジ内は見送り）。レンジ内ブレイクは頭上供給に食われやすい。
+//    損切/利確: 損切=L2（価格固定）、利確=e+RR*risk（価格固定、既定RR4）。指値を下げるぶん
+//               実効RRは膨らむ（reward↑/risk↓）。サイズ: 1トレード=資金 riskPct%（risk=lim-L2）、
+//               BTC最小0.01ロット刻みに切り上げ（リスク許容5%内、取りこぼし回避）。
+//    任意ラチェット（既定OFF・BTCのDD管理用）: 含み益が TP2*u に届いたら損切を TP1*u へ引き上げ
+//               （u=lim-L2）。早利確はせず全量を最終targetまで走らせる＝runnerは削らず、TP2到達後に
+//               往復ビンタで負けに戻る分だけ救う。gold では有害・BTC 固有の用途。
+//
+//  no-lookahead: KAMAゲート/PDH は [1]（前バー/前日の確定値）+ lookahead_off。終値計算→次足約定で1本ぶんの誤差。
+//  運用上の注意 : long-only。1%リスク上限・実DDはバックテストの1.5-2倍想定。**BTCのスプレッド/
+//                 スワップは別途確認**（tight でないが約定コストは要検証）。15M チャートに適用。
+// =============================================================================
+strategy("[BTC 15M] Swing Breakout (ZigZag) + pullback-limit",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.03)
+
+// ----- inputs ----------------------------------------------------------------
+zzK      = input.float(2.0,  "ZigZag reversal (ATR)", step = 0.25, minval = 0.5)
+atrLen   = input.int(14,     "ATR length", minval = 1)
+trendLen = input.int(80,     "Trend EMA (gate)", minval = 1)
+useGate  = input.bool(true,  "Require wave-1 high above trend EMA")
+rr       = input.float(4.0,  "Reward : Risk (fixed target level)", step = 0.5, minval = 0.5)
+boWindow = input.int(20,     "Breakout window (bars after wave-2 low)", minval = 1)
+riskPct  = input.float(1.0,  "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
+pbFrac   = input.float(0.30, "Pullback-limit depth (entry = e - frac*risk)", step = 0.05, minval = 0.0, maxval = 0.95)
+fillWin  = input.int(200,    "Pullback-limit fill window (bars; cancel if unfilled)", minval = 1)
+useKama  = input.bool(true,  "KAMA-rising regime gate (BTC's gate)")
+kamaTf   = input.timeframe("D", "KAMA gate timeframe (D = slow/defensive, 240 = fast/aggressive)")
+kamaLen  = input.int(14,     "KAMA length", minval = 2)
+usePdh   = input.bool(true,  "PDH sizing (full size only above prior-day high)")
+pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks)", step = 0.25, minval = 0.0, maxval = 1.0)
+useRatch = input.bool(false, "TP2->TP1 stop ratchet (BTC DD-management; default OFF)")
+tp2Rr    = input.float(3.0,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
+ratToRr  = input.float(2.0,  "Ratchet stop-to level TP1 (in R; 0 = breakeven)", step = 0.5, minval = 0.0)
+showZZ   = input.bool(true,  "ZigZag: draw the swing line", group = "ZigZag drawing")
+zzCol    = input.color(color.new(color.teal, 0), "ZigZag color", group = "ZigZag drawing")
+zzW      = input.int(2,      "ZigZag width", minval = 1, group = "ZigZag drawing")
+
+atr   = ta.atr(atrLen)
+ema80 = ta.ema(close, trendLen)
+flat  = strategy.position_size == 0
+
+// Kaufman Adaptive MA (KAMA) -- ER-modulated smoothing (fast=2, slow=30).
+f_kama(src, len) =>
+    mom = math.abs(src - src[len])
+    vol = math.sum(math.abs(src - src[1]), len)
+    er  = vol != 0 ? mom / vol : 0.0
+    sc  = math.pow(er * (2.0 / 3.0 - 2.0 / 31.0) + 2.0 / 31.0, 2)
+    var float k = na
+    k := na(k[1]) ? src : k[1] + sc * (src - k[1])
+    k
+
+// KAMA(kamaLen)-rising gate on kamaTf (prior completed bar; no repaint / no lookahead).
+dKama1 = request.security(syminfo.tickerid, kamaTf, f_kama(close, kamaLen)[1], lookahead = barmerge.lookahead_off)
+dKama2 = request.security(syminfo.tickerid, kamaTf, f_kama(close, kamaLen)[2], lookahead = barmerge.lookahead_off)
+kamaUp = dKama1 > dKama2
+kamaOk = (not useKama) or kamaUp
+
+// prior-day high (prior COMPLETED day; no repaint / no lookahead)
+pdh = request.security(syminfo.tickerid, "1D", high[1], lookahead = barmerge.lookahead_off)
+
+// ----- online ZigZag (ATR-threshold reversal) --------------------------------
+var int   zzDir = 1
+var float zzExt = na
+var int   zzExtBar   = na  // bar_index of the running extreme (for ZigZag drawing)
+var int   zzPrevBar  = na  // last confirmed pivot: bar
+var float zzPrevPrice = na // last confirmed pivot: price
+if na(zzExt)
+    zzExt := high
+if na(zzExtBar)
+    zzExtBar := bar_index
+
+var float swHigh    = na   // H1
+var float swLow     = na   // L2
+var float swLowPrev = na   // L0
+
+var bool  armed  = false
+var float armH1  = na
+var float armL2  = na
+var int   armBar = na
+
+thr = zzK * atr
+
+if zzDir >= 0
+    if high > zzExt
+        zzExt := high
+    else if zzExt - low >= thr
+        swHigh := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swHigh, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swHigh
+        zzDir  := -1
+        zzExt  := low
+if zzDir <= 0
+    if low < zzExt
+        zzExt := low
+    else if high - zzExt >= thr
+        swLowPrev := swLow
+        swLow     := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swLow, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swLow
+        zzDir     := 1
+        zzExt     := high
+        okStruct = not na(swHigh) and not na(swLowPrev) and swLow > swLowPrev and swHigh > swLowPrev
+        okGate   = (not useGate) or (not na(ema80) and swHigh > ema80)
+        if okStruct and okGate
+            armed  := true
+            armH1  := swHigh
+            armL2  := swLow
+            armBar := bar_index
+
+// track the bar of the running extreme (for ZigZag drawing; updated after the swing block)
+if not na(zzExt[1]) and zzExt != zzExt[1]
+    zzExtBar := bar_index
+
+if armed and (bar_index - armBar) > boWindow
+    armed := false
+
+// ----- pullback-limit state machine ------------------------------------------
+var bool  pend    = false
+var float pLim    = na
+var float pStop   = na
+var float pTgt    = na
+var float pU      = na       // realized risk = lim - stop (sizing + ratchet unit)
+var float pW      = na       // size weight: 1.0 above PDH (new-high air), pdhInW inside range
+var int   pBar    = na
+var float curStop = na
+var float curTgt  = na
+var bool  ratched = false
+
+// place a pullback limit on a confirmed break (do not chase at market)
+if armed and flat and not pend and bar_index > armBar and close > armH1 and kamaOk
+    e    = close
+    risk = e - armL2
+    lim  = e - pbFrac * risk
+    w    = (not usePdh) or (not na(pdh) and e > pdh) ? 1.0 : pdhInW
+    if risk > 0 and lim > armL2 and w > 0
+        pLim  := lim
+        pStop := armL2
+        pTgt  := e + rr * risk
+        pU    := lim - armL2
+        pW    := w
+        pBar  := bar_index
+        pend  := true
+    armed := false
+
+// while waiting: keep the limit live; cancel if price ran to target first (missed) or expired
+if pend and flat
+    // BTC 最小ロット 0.01 → 小数第2位に切り上げ（リスク許容5%内なので取りこぼしを避け最小0.01で建てる）
+    qty = math.ceil((strategy.equity * riskPct * pW) / pU * 100) / 100
+    if qty >= 0.01
+        strategy.entry("L", strategy.long, qty = qty, limit = pLim)
+    if high >= pTgt
+        strategy.cancel("L")
+        pend := false
+    else if bar_index - pBar >= fillWin
+        strategy.cancel("L")
+        pend := false
+
+// on fill: lock the exit levels
+if strategy.position_size > 0 and pend
+    pend    := false
+    curStop := pStop
+    curTgt  := pTgt
+    ratched := false
+
+// optional ratchet: once high >= lim + tp2Rr*u, raise stop to lim + ratToRr*u
+if strategy.position_size > 0 and useRatch and not ratched and high >= pLim + tp2Rr * pU
+    curStop := pLim + ratToRr * pU
+    ratched := true
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
+
+// ----- plots -----------------------------------------------------------------
+bgcolor(useKama and not kamaUp ? color.new(color.orange, 90) : na, title = "KAMA gate falling (gated off)")
+plot(ema80, "Trend EMA", color = color.new(color.blue, 0), linewidth = 2)
+plot(armed ? armH1 : na, "Armed H1 (break line)", color = color.new(color.orange, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(pend ? pLim : na, "Pullback limit", color = color.new(color.aqua, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(usePdh ? pdh : na, "Prior-day high (PDH)", color = color.new(color.gray, 30),
+     style = plot.style_steplinebr, linewidth = 1)
+brkNow = armed and flat and not pend and bar_index > armBar and close > armH1 and kamaOk
+plotshape(brkNow and close > pdh, title = "Break above PDH (full size)",
+     style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
+plotshape(brkNow and not (close > pdh), title = "Break inside range (reduced size)",
+     style = shape.triangleup, location = location.belowbar, color = color.yellow, size = size.tiny)

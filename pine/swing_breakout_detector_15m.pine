@@ -1,0 +1,238 @@
+//@version=5
+// =============================================================================
+//  [15M] Swing Breakout Detector (ZigZag) -- indicator (not a strategy).
+//  デイスキャル用のブレイク検出器。15M チャートに適用（他TFでも動くが 15M 用に設計）。
+//
+//  何をするか（2段階）:
+//    1) 構え(ARMED): オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）が
+//       L0(安)->H1(高)->L2(安) かつ L2>L0（higher low）を確定し、H1>トレンドEMA（任意）なら
+//       「構え」。H1=ブレイク線（橙）と L2=損切り線（赤）をチャートに描く。
+//       boWindow 本以内にブレイクしなければ構え解除。
+//    2) 確定ブレイク(GO): 足が H1 を「終値で」上抜け、かつ有効な全ゲートがONなら GO シグナル
+//       （緑▲＋ラベル: エントリ/損切/利確/押し目指値の価格）。ゲートOFF中のブレイクは
+//       灰×で表示のみ（見送りの記録）。ブレイクは構えを消費する（GO でも見送りでも解除）。
+//
+//  ゲート（銘柄プリセット -- 手で切り替える）:
+//    GOLD 15M : useDaily=ON (SMA150+slope10) / useExtCap=ON (8%) / useKama=OFF
+//               / useSess は任意（9-15 死帯スキップ、既定OFF）
+//    BTC 15M  : useDaily=OFF / useExtCap=OFF / useKama=ON (kamaTf=D 遅い・守り
+//               / 240 速い・攻め=ベアラリーに騙されやすい) / usePdh=ON（PDH上=フル、
+//               レンジ内=減量の目安）
+//
+//  発注の目安（ラベルの数字）:
+//    エントリ e = ブレイク足の終値（成行なら次足始値≈e）。損切 = L2。利確 = e + RR*(e-L2)。
+//    押し目指値 lim = e - pbFrac*(e-L2)（pbFrac>0 のとき表示。指値派: lim に置き、
+//    target 先行なら見送り）。サイズは各自 口座リスク%/(e-L2) で計算（本検出器は非表示）。
+//
+//  アラート: 「アラート作成 -> 条件=このインジ」で
+//    (1) Setup armed  (2) GO breakout  (3) GO breakout above PDH  の3種。
+//    いずれも足の確定で評価（"Once per bar close" を選ぶこと）。動的な価格入り
+//    メッセージが欲しい場合は「Any alert() function call」を選ぶ（GO 時に価格入りで発報）。
+//
+//  no-lookahead / no-repaint: 日足・KAMA・PDH は [1]（前バー/前日の確定値）+ lookahead_off。
+//  ZigZag はしきい値到達で確定（過去の描き直し無し）。トリガは確定足の終値のみ。
+//  注意: 本検出器はコスト・サイズ・約定を扱わない（見る/鳴らす専用）。検証・成績は
+//  対応する strategy 版（gold_15m_swing_breakout_zigzag / btc_15m_swing_breakout_zigzag）で行うこと。
+// =============================================================================
+indicator("[15M] Swing Breakout Detector (ZigZag)", overlay = true,
+     max_labels_count = 500, max_lines_count = 500)
+
+// ----- inputs ----------------------------------------------------------------
+zzK      = input.float(2.0, "ZigZag reversal (ATR)",  step = 0.25, minval = 0.5)
+atrLen   = input.int(14,    "ATR length",             minval = 1)
+trendLen = input.int(80,    "Trend EMA (gate)",       minval = 1)
+useGate  = input.bool(true, "Require wave-1 high above trend EMA")
+rr       = input.float(4.0, "Reward : Risk (target display)", step = 0.5, minval = 0.5)
+boWindow = input.int(20,    "Breakout window (bars after wave-2 low)", minval = 1)
+pbFrac   = input.float(0.0, "Pullback-limit depth display (0 = market entry)", step = 0.05, minval = 0.0, maxval = 0.95)
+
+grpG     = "Regime gates (preset: GOLD=daily SMA+extCap / BTC=KAMA)"
+useDaily = input.bool(false, "Daily SMA regime gate (close > rising SMA)", group = grpG)
+dSmaLen  = input.int(150,   "Daily SMA length", minval = 1, group = grpG)
+dSlopeK  = input.int(10,    "Daily SMA slope lookback (rising over k days; 0=off)", minval = 0, group = grpG)
+useExtCap= input.bool(false,"Extension cap (skip when prior-day close > cap% above daily SMA)", group = grpG)
+extCap   = input.float(8.0, "Extension cap %", step = 0.5, minval = 0.0, group = grpG)
+useKama  = input.bool(true, "KAMA-rising regime gate", group = grpG)
+kamaTf   = input.timeframe("D", "KAMA gate timeframe (D = slow/defensive, 240 = fast/aggressive)", group = grpG)
+kamaLen  = input.int(14,    "KAMA length", minval = 2, group = grpG)
+useSess  = input.bool(false,"Session skip (block GO inside hour range)", group = grpG)
+sessTz   = input.string("UTC", "Session timezone (match the broker-server clock)", group = grpG)
+skipFrom = input.int(9,     "Skip window START hour (inclusive)", minval = 0, maxval = 23, group = grpG)
+skipTo   = input.int(15,    "Skip window END hour (exclusive)",   minval = 1, maxval = 24, group = grpG)
+usePdh   = input.bool(true, "Show prior-day-high context (above PDH = fresh air)", group = grpG)
+
+grpD     = "Drawing"
+showZZ   = input.bool(true, "ZigZag: draw the swing line", group = grpD)
+zzCol    = input.color(color.new(color.teal, 0), "ZigZag color", group = grpD)
+zzW      = input.int(2,     "ZigZag width", minval = 1, group = grpD)
+showTbl  = input.bool(true, "Show the gate/state table", group = grpD)
+markOff  = input.bool(true, "Mark gated-off breaks (gray x)", group = grpD)
+
+atr   = ta.atr(atrLen)
+ema80 = ta.ema(close, trendLen)
+
+// Kaufman Adaptive MA (KAMA) -- ER-modulated smoothing (fast=2, slow=30).
+f_kama(src, len) =>
+    mom = math.abs(src - src[len])
+    vol = math.sum(math.abs(src - src[1]), len)
+    er  = vol != 0 ? mom / vol : 0.0
+    sc  = math.pow(er * (2.0 / 3.0 - 2.0 / 31.0) + 2.0 / 31.0, 2)
+    var float k = na
+    k := na(k[1]) ? src : k[1] + sc * (src - k[1])
+    k
+
+// daily regime: prior COMPLETED day's close above a RISING daily SMA (no repaint / no lookahead).
+dSmaNow  = request.security(syminfo.tickerid, "1D", ta.sma(close, dSmaLen)[1],            lookahead = barmerge.lookahead_off)
+dClose1  = request.security(syminfo.tickerid, "1D", close[1],                              lookahead = barmerge.lookahead_off)
+dSmaPast = request.security(syminfo.tickerid, "1D", ta.sma(close, dSmaLen)[1 + dSlopeK],   lookahead = barmerge.lookahead_off)
+dailyUp  = (dClose1 > dSmaNow) and (dSlopeK <= 0 or dSmaNow > dSmaPast)
+dailyOk  = (not useDaily) or dailyUp
+
+// EXTENSION CAP: prior-day close vs prior-day daily SMA (same no-lookahead values as the gate).
+extPct = dSmaNow != 0 ? (dClose1 - dSmaNow) / dSmaNow * 100.0 : 0.0
+extOk  = (not useExtCap) or (extPct <= extCap)
+
+// KAMA(kamaLen)-rising gate on kamaTf (prior completed bar; no repaint / no lookahead).
+dKama1 = request.security(syminfo.tickerid, kamaTf, f_kama(close, kamaLen)[1], lookahead = barmerge.lookahead_off)
+dKama2 = request.security(syminfo.tickerid, kamaTf, f_kama(close, kamaLen)[2], lookahead = barmerge.lookahead_off)
+kamaUp = dKama1 > dKama2
+kamaOk = (not useKama) or kamaUp
+
+// SESSION SKIP (optional): block GO signals whose hour is inside [skipFrom, skipTo).
+hr     = hour(time, sessTz)
+inSkip = hr >= skipFrom and hr < skipTo
+sessOk = (not useSess) or (not inSkip)
+
+// prior-day high (prior COMPLETED day; no repaint / no lookahead)
+pdh = request.security(syminfo.tickerid, "1D", high[1], lookahead = barmerge.lookahead_off)
+
+// ----- online ZigZag (ATR-threshold reversal) --------------------------------
+var int   zzDir = 1
+var float zzExt = na
+var int   zzExtBar    = na  // bar_index of the running extreme (for ZigZag drawing)
+var int   zzPrevBar   = na  // last confirmed pivot: bar
+var float zzPrevPrice = na  // last confirmed pivot: price
+if na(zzExt)
+    zzExt := high
+if na(zzExtBar)
+    zzExtBar := bar_index
+
+var float swHigh    = na   // H1
+var float swLow     = na   // L2
+var float swLowPrev = na   // L0
+
+var bool  armed  = false
+var float armH1  = na
+var float armL2  = na
+var int   armBar = na
+
+thr = zzK * atr
+
+if zzDir >= 0
+    if high > zzExt
+        zzExt := high
+    else if zzExt - low >= thr
+        swHigh := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swHigh, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swHigh
+        zzDir  := -1
+        zzExt  := low
+if zzDir <= 0
+    if low < zzExt
+        zzExt := low
+    else if high - zzExt >= thr
+        swLowPrev := swLow
+        swLow     := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swLow, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swLow
+        zzDir := 1
+        zzExt := high
+        okStruct = not na(swHigh) and not na(swLowPrev) and swLow > swLowPrev and swHigh > swLowPrev
+        okGate   = (not useGate) or (not na(ema80) and swHigh > ema80)
+        if okStruct and okGate
+            armed  := true
+            armH1  := swHigh
+            armL2  := swLow
+            armBar := bar_index
+
+// track the bar of the running extreme (for ZigZag drawing; updated after the swing block)
+if not na(zzExt[1]) and zzExt != zzExt[1]
+    zzExtBar := bar_index
+
+// arm expiry + arm-event flag (for the alert)
+var bool armedNew = false
+armedNew := armed and not armed[1]
+if armed and (bar_index - armBar) > boWindow
+    armed := false
+
+// ----- break detection (confirmed close above H1; break consumes the arm) -----
+gatesOk = dailyOk and kamaOk and extOk and sessOk
+brk     = armed and bar_index > armBar and close > armH1
+sigGo   = brk and gatesOk
+sigOff  = brk and not gatesOk
+goAbovePdh = sigGo and (not usePdh or (not na(pdh) and close > pdh))
+
+if brk
+    e    = close
+    risk = e - armL2
+    if sigGo and risk > 0
+        lim  = e - pbFrac * risk
+        tgt  = e + rr * risk
+        txt  = "GO  e=" + str.tostring(e, format.mintick) + "\nSL=" + str.tostring(armL2, format.mintick) + "  TP=" + str.tostring(tgt, format.mintick) + (pbFrac > 0.0 ? "\nlim=" + str.tostring(lim, format.mintick) : "") + (usePdh and not na(pdh) ? (e > pdh ? "\nPDH上=フル" : "\nレンジ内=減量") : "")
+        label.new(bar_index, low, txt, style = label.style_label_up, color = color.new(color.green, 15), textcolor = color.white, size = size.small)
+        if barstate.isconfirmed
+            alert("[15M BO] " + syminfo.ticker + " GO: e=" + str.tostring(e, format.mintick) + " SL=" + str.tostring(armL2, format.mintick) + " TP=" + str.tostring(tgt, format.mintick) + (pbFrac > 0.0 ? " lim=" + str.tostring(lim, format.mintick) : "") + (usePdh and not na(pdh) and e > pdh ? " [PDH上]" : ""), alert.freq_once_per_bar_close)
+    armed := false
+
+// ----- plots -----------------------------------------------------------------
+plot(useDaily ? dSmaNow : na, "Daily SMA (regime)", color = color.new(color.purple, 0), linewidth = 1)
+plot(ema80, "Trend EMA", color = color.new(color.blue, 0), linewidth = 2)
+plot(armed ? armH1 : na, "Armed H1 (break line)", color = color.new(color.orange, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(usePdh ? pdh : na, "Prior-day high (PDH)", color = color.new(color.gray, 30),
+     style = plot.style_steplinebr, linewidth = 1)
+bgcolor(useDaily and not dailyUp ? color.new(color.red, 92) : na, title = "SMA regime down/flat (gated off)")
+bgcolor(useExtCap and not extOk ? color.new(color.yellow, 88) : na, title = "Extension too high (gated off)")
+bgcolor(useKama and not kamaUp ? color.new(color.orange, 90) : na, title = "KAMA falling (gated off)")
+bgcolor(useSess and inSkip ? color.new(color.gray, 88) : na, title = "Session skip window")
+
+plotshape(sigGo, title = "GO breakout", style = shape.triangleup, location = location.belowbar,
+     color = color.lime, size = size.small)
+plotshape(markOff and sigOff, title = "Gated-off break (skipped)", style = shape.xcross,
+     location = location.belowbar, color = color.new(color.gray, 20), size = size.tiny)
+plotshape(armedNew, title = "Setup armed", style = shape.circle, location = location.belowbar,
+     color = color.new(color.orange, 30), size = size.tiny)
+
+// ----- gate/state table --------------------------------------------------------
+var table tbl = table.new(position.top_right, 2, 7, border_width = 1)
+if showTbl and barstate.islast
+    okCol  = color.new(color.green, 70)
+    ngCol  = color.new(color.red,   70)
+    naCol  = color.new(color.gray,  80)
+    table.cell(tbl, 0, 0, "構え",       bgcolor = armed ? okCol : naCol, text_color = color.white)
+    table.cell(tbl, 1, 0, armed ? "H1=" + str.tostring(armH1, format.mintick) + " L2=" + str.tostring(armL2, format.mintick) : "--", bgcolor = armed ? okCol : naCol, text_color = color.white)
+    table.cell(tbl, 0, 1, "日足SMA",    bgcolor = not useDaily ? naCol : dailyUp ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 1, 1, not useDaily ? "OFF" : dailyUp ? "上向き" : "下/横", bgcolor = not useDaily ? naCol : dailyUp ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 0, 2, "乖離cap",    bgcolor = not useExtCap ? naCol : extOk ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 1, 2, not useExtCap ? "OFF" : str.tostring(extPct, "#.#") + "%", bgcolor = not useExtCap ? naCol : extOk ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 0, 3, "KAMA",       bgcolor = not useKama ? naCol : kamaUp ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 1, 3, not useKama ? "OFF" : kamaUp ? "上向き" : "下向き", bgcolor = not useKama ? naCol : kamaUp ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 0, 4, "セッション", bgcolor = not useSess ? naCol : sessOk ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 1, 4, not useSess ? "OFF" : sessOk ? "取引可" : "死帯", bgcolor = not useSess ? naCol : sessOk ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 0, 5, "PDH",        bgcolor = not usePdh ? naCol : close > pdh ? okCol : color.new(color.yellow, 70), text_color = color.white)
+    table.cell(tbl, 1, 5, not usePdh ? "OFF" : close > pdh ? "上（フル）" : "レンジ内（減量）", bgcolor = not usePdh ? naCol : close > pdh ? okCol : color.new(color.yellow, 70), text_color = color.white)
+    table.cell(tbl, 0, 6, "総合",       bgcolor = gatesOk ? okCol : ngCol, text_color = color.white)
+    table.cell(tbl, 1, 6, gatesOk ? "GO可" : "見送り", bgcolor = gatesOk ? okCol : ngCol, text_color = color.white)
+
+// ----- alerts ------------------------------------------------------------------
+alertcondition(armedNew,   "Setup armed",          "[15M BO] setup armed: higher-low confirmed, watching the H1 break line")
+alertcondition(sigGo,      "GO breakout",          "[15M BO] confirmed breakout with all gates ON")
+alertcondition(goAbovePdh, "GO breakout above PDH", "[15M BO] confirmed breakout above the prior-day high (fresh air)")

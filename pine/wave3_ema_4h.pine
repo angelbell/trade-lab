@@ -139,7 +139,7 @@ else if modeL == 2 and close > trigHiL
                 L_t2 := na(t2) ? t1 : t2
                 L_t1hit := false
                 enterL := true
-                qty = (strategy.equity * 0.10) / risk
+                qty = math.ceil((strategy.equity * 0.10) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
                 strategy.entry("L", strategy.long, qty=qty)
                 L_gBox := box.new(bar_index, L_t2, bar_index, L_e,
                      border_color=color.new(color.green,40), bgcolor=color.new(color.green,82))
@@ -210,7 +210,7 @@ else if modeS == 2 and close < trigLoS
                 S_t2 := na(t2) ? t1 : t2
                 S_t1hit := false
                 enterS := true
-                qty = (strategy.equity * 0.10) / risk
+                qty = math.ceil((strategy.equity * 0.10) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
                 strategy.entry("S", strategy.short, qty=qty)
                 S_gBox := box.new(bar_index, S_e, bar_index, S_t2,
                      border_color=color.new(color.green,40), bgcolor=color.new(color.green,82))

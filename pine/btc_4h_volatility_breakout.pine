@@ -65,7 +65,7 @@ if flat and useLongs and longBreak
         pT1   := close + rr1 * risk
         pT2   := close + rr2 * risk
         entryBar := bar_index
-        qty = (strategy.equity * riskPct) / risk
+        qty = math.ceil((strategy.equity * riskPct) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
         strategy.entry("L", strategy.long, qty = qty)
 
 if flat and useShorts and shortBreak and not (useLongs and longBreak)
@@ -75,7 +75,7 @@ if flat and useShorts and shortBreak and not (useLongs and longBreak)
         pT1   := close - rr1 * risk
         pT2   := close - rr2 * risk
         entryBar := bar_index
-        qty = (strategy.equity * riskPct) / risk
+        qty = math.ceil((strategy.equity * riskPct) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
         strategy.entry("S", strategy.short, qty = qty)
 
 // ---- exits: スケールアウト（半分を rr1 / 残りを rr2、ストップ共通=初期-1ATR） ---

@@ -47,6 +47,9 @@ useSess  = input.bool(false,"Session skip (skip breakouts inside a dead-window h
 sessTz   = input.string("UTC", "Session timezone (match the broker-server clock used for validation)")
 skipFrom = input.int(9,     "Skip window START hour (inclusive)", minval = 0, maxval = 23)
 skipTo   = input.int(15,    "Skip window END hour (exclusive)",   minval = 1, maxval = 24)
+showZZ   = input.bool(true, "ZigZag: draw the swing line", group = "ZigZag drawing")
+zzCol    = input.color(color.new(color.teal, 0), "ZigZag color", group = "ZigZag drawing")
+zzW      = input.int(2,     "ZigZag width", minval = 1, group = "ZigZag drawing")
 
 atr   = ta.atr(atrLen)
 ema80 = ta.ema(close, trendLen)
@@ -87,8 +90,13 @@ sessOk  = (not useSess) or (not inSkip)
 // ----- online ZigZag (ATR-threshold reversal) --------------------------------
 var int   zzDir = 1
 var float zzExt = na
+var int   zzExtBar   = na  // bar_index of the running extreme (for ZigZag drawing)
+var int   zzPrevBar  = na  // last confirmed pivot: bar
+var float zzPrevPrice = na // last confirmed pivot: price
 if na(zzExt)
     zzExt := high
+if na(zzExtBar)
+    zzExtBar := bar_index
 
 var float swHigh    = na   // H1
 var float swLow     = na   // L2
@@ -106,6 +114,11 @@ if zzDir >= 0
         zzExt := high
     else if zzExt - low >= thr
         swHigh := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swHigh, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swHigh
         zzDir  := -1
         zzExt  := low
 if zzDir <= 0
@@ -114,6 +127,11 @@ if zzDir <= 0
     else if high - zzExt >= thr
         swLowPrev := swLow
         swLow     := zzExt
+        if showZZ
+            if not na(zzPrevBar)
+                line.new(zzPrevBar, zzPrevPrice, zzExtBar, swLow, xloc = xloc.bar_index, color = zzCol, width = zzW)
+            zzPrevBar   := zzExtBar
+            zzPrevPrice := swLow
         zzDir     := 1
         zzExt     := high
         okStruct = not na(swHigh) and not na(swLowPrev) and swLow > swLowPrev and swHigh > swLowPrev
@@ -123,6 +141,10 @@ if zzDir <= 0
             armH1  := swHigh
             armL2  := swLow
             armBar := bar_index
+
+// track the bar of the running extreme (for ZigZag drawing; updated after the swing block)
+if not na(zzExt[1]) and zzExt != zzExt[1]
+    zzExtBar := bar_index
 
 if armed and (bar_index - armBar) > boWindow
     armed := false
@@ -136,7 +158,7 @@ if armed and flat and bar_index > armBar and close > armH1
         if risk > 0
             curStop := armL2
             curTgt  := close + rr * risk
-            qty = (strategy.equity * riskPct) / risk
+            qty = math.ceil((strategy.equity * riskPct) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
             strategy.entry("L", strategy.long, qty = qty)
     armed := false
 

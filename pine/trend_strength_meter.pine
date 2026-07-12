@@ -1,0 +1,106 @@
+//@version=5
+// =============================================================================
+//  [RADAR]  Trend Strength Tiles (0-10)  -- multi-timeframe DESCRIPTIVE gauge
+//
+//  各タイル = 指定した時間軸の「今のトレンド強度(0-10)＋方向」を色付きセルで表示。
+//  最大4タイル、時間軸は各自指定。既定は 4時間足の1タイルのみ（他3つはOFF）。
+//  ※これは"現状の記述"であって"予測ではない"（トレンド強度は先へ持続しない=検証済）。
+//    用途 = 文脈把握・枚数調整・「上位足が緑&≥5 なら順張り可 / 弱・逆行なら手を出さない」。売買シグナルではない。
+//
+//  強度(0-10) = 各軸で ER(効率比)+ADX+MAスタック一致+傾き+ATR拡張 の加重平均×10。
+//  方向 = MAスタックの符号（▲UP / ▼DOWN / –FLAT）。色 = 方向、濃さ = 強度(≥7濃/4-7中/＜4薄)。
+//
+//  no-lookahead注意: 各タイルは request.security で当該足の"現在値"を読む（記述用=HTF足の途中で更新）。
+//                    確定値のみが必要なら useConfirmed=ON（前足確定値[1]）。
+//  運用: 参考計器。実DD/コストは別途。銘柄目安 gold=4H / BTC=2H+4H（1Dは遅すぎ・15mは銘柄依存）。
+// =============================================================================
+indicator("[RADAR] Trend Strength Tiles (0-10)", overlay = true)
+
+// ----- shared component settings ---------------------------------------------
+erLen    = input.int(20,  "ER length", minval = 2, group = "strength components")
+adxLen   = input.int(14,  "ADX length", minval = 2, group = "strength components")
+emaFast  = input.int(20,  "EMA fast", minval = 1, group = "strength components")
+emaSlow  = input.int(50,  "EMA slow", minval = 1, group = "strength components")
+slopeLb  = input.int(10,  "Slope lookback (bars)", minval = 1, group = "strength components")
+slopeScl = input.float(1.5,"Slope scale (ATRs = full)", step = 0.1, group = "strength components")
+rsiLen   = input.int(14,  "RSI length", minval = 2, group = "strength components")
+macdScl  = input.float(1.0,"MACD-hist scale (ATRs = full)", step = 0.1, group = "strength components")
+wER      = input.float(1.0,"weight ER", step = 0.25, group = "strength components")
+wADX     = input.float(1.0,"weight ADX", step = 0.25, group = "strength components")
+wAlign   = input.float(1.0,"weight ALIGN", step = 0.25, group = "strength components")
+wSlope   = input.float(1.0,"weight SLOPE", step = 0.25, group = "strength components")
+wATR     = input.float(1.0,"weight ATRexp", step = 0.25, group = "strength components")
+// NOTE: MACD-hist & RSI were tested as gate inputs -> did NOT improve (gold got worse, BTC a wash).
+// Orthogonal (MACD-hist) != useful: acceleration mean-reverts. Defaults 0 = gate uses the 5-comp
+// score (best). Raise only if you want them folded in as a readout preference (gold gate degrades).
+wMACD    = input.float(0.0,"weight MACD-hist (accel; tested gate-neutral->off)", step = 0.25, group = "strength components")
+wRSI     = input.float(0.0,"weight RSI-pos (redundant ~0.66; tested gate-neutral->off)", step = 0.25, group = "strength components")
+
+// ----- tiles (max 4; default = 4H only) --------------------------------------
+en1 = input.bool(true,  "Tile 1 on", inline = "t1", group = "tiles")
+tf1 = input.timeframe("240", "TF", inline = "t1", group = "tiles")
+en2 = input.bool(false, "Tile 2 on", inline = "t2", group = "tiles")
+tf2 = input.timeframe("120", "TF", inline = "t2", group = "tiles")
+en3 = input.bool(false, "Tile 3 on", inline = "t3", group = "tiles")
+tf3 = input.timeframe("60",  "TF", inline = "t3", group = "tiles")
+en4 = input.bool(false, "Tile 4 on", inline = "t4", group = "tiles")
+tf4 = input.timeframe("D",   "TF", inline = "t4", group = "tiles")
+tPos = input.string("top_right", "Table position",
+     options = ["top_right", "top_left", "top_center", "bottom_right", "bottom_left", "middle_right"], group = "tiles")
+tSize = input.string("large", "Tile text size", options = ["small", "normal", "large", "huge"], group = "tiles")
+
+clamp01(x) => math.max(0.0, math.min(1.0, x))
+
+// strength(0-10) + stack-sign(direction) for the CURRENT context (called via request.security)
+f_meter() =>
+    a    = ta.atr(14)
+    mom  = math.abs(close - close[erLen])
+    vsum = math.sum(math.abs(close - close[1]), erLen)
+    er   = vsum > 0 ? mom / vsum : 0.0
+    [_dp, _dm, adx] = ta.dmi(adxLen, adxLen)
+    adxN = clamp01((adx - 15.0) / 25.0)
+    emaF = ta.ema(close, emaFast)
+    emaS = ta.ema(close, emaSlow)
+    stack = (close > emaF ? 1 : -1) + (emaF > emaS ? 1 : -1) + (emaS > emaS[slopeLb] ? 1 : -1)
+    align = math.abs(stack) / 3.0
+    slopeN = clamp01(math.abs(emaS - emaS[slopeLb]) / (a * slopeScl))
+    atrexpN = clamp01((a / ta.sma(a, 100) - 0.8) / 0.7)
+    rsiN = clamp01(math.abs(ta.rsi(close, rsiLen) - 50.0) / 50.0)          // momentum position (redundant ~0.66)
+    [_ml, _sig, hist] = ta.macd(close, 12, 26, 9)
+    macdN = clamp01(math.abs(hist) / (a * macdScl))                        // histogram = acceleration (orthogonal)
+    wsum = wER + wADX + wAlign + wSlope + wATR + wMACD + wRSI
+    strength = 10.0 * (wER*er + wADX*adxN + wAlign*align + wSlope*slopeN + wATR*atrexpN + wMACD*macdN + wRSI*rsiN) / wsum
+    [strength, stack]
+
+// evaluate all 4 (unconditional; render only enabled)
+[s1, d1] = request.security(syminfo.tickerid, tf1, f_meter(), lookahead = barmerge.lookahead_off)
+[s2, d2] = request.security(syminfo.tickerid, tf2, f_meter(), lookahead = barmerge.lookahead_off)
+[s3, d3] = request.security(syminfo.tickerid, tf3, f_meter(), lookahead = barmerge.lookahead_off)
+[s4, d4] = request.security(syminfo.tickerid, tf4, f_meter(), lookahead = barmerge.lookahead_off)
+
+tflabel(tf) => tf == "240" ? "4H" : tf == "120" ? "2H" : tf == "60" ? "1H" : tf == "D" ? "1D" : tf == "15" ? "15m" : tf == "30" ? "30m" : tf == "5" ? "5m" : tf
+arrow(d) => d >= 2 ? "▲" : d <= -2 ? "▼" : "–"
+tileCol(s, d) =>
+    base  = d >= 2 ? color.green : d <= -2 ? color.red : color.gray
+    transp = s >= 7 ? 8 : s >= 4 ? 32 : 62
+    color.new(base, transp)
+txtSize = tSize == "small" ? size.small : tSize == "normal" ? size.normal : tSize == "huge" ? size.huge : size.large
+pos = tPos == "top_left" ? position.top_left : tPos == "top_center" ? position.top_center : tPos == "bottom_right" ? position.bottom_right : tPos == "bottom_left" ? position.bottom_left : tPos == "middle_right" ? position.middle_right : position.top_right
+
+var table tb = table.new(pos, 4, 1, border_width = 2)
+
+putTile(col, en, tf, s, d) =>
+    c2 = col
+    if en
+        table.cell(tb, col, 0, tflabel(tf) + "\n" + str.tostring(math.round(s)) + "/10 " + arrow(d),
+             bgcolor = tileCol(s, d), text_color = color.white, text_size = txtSize)
+        c2 := col + 1
+    c2
+
+if barstate.islast
+    table.clear(tb, 0, 0, 3, 0)
+    col = 0
+    col := putTile(col, en1, tf1, s1, d1)
+    col := putTile(col, en2, tf2, s2, d2)
+    col := putTile(col, en3, tf3, s3, d3)
+    col := putTile(col, en4, tf4, s4, d4)

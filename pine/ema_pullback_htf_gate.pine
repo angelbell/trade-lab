@@ -132,7 +132,7 @@ if upTrend and gateUp
         if r > 0
             lStop := sP
             lTgt  := close + rr * r
-            qty = (strategy.equity * riskPct) / r
+            qty = math.ceil((strategy.equity * riskPct) / r * 100) / 100  // 0.01ロット刻みに切り上げ
             strategy.entry("L", strategy.long, qty=qty,
                  comment=str.format("G:{0}/{1}({2})", gateEnable ? gateTF : "off", gateType, gateN))
         lState := 0
@@ -156,7 +156,7 @@ if dnTrend and gateDn
         if r > 0
             sStop := sP
             sTgt  := close - rr * r
-            qty = (strategy.equity * riskPct) / r
+            qty = math.ceil((strategy.equity * riskPct) / r * 100) / 100  // 0.01ロット刻みに切り上げ
             strategy.entry("S", strategy.short, qty=qty,
                  comment=str.format("G:{0}/{1}({2})", gateEnable ? gateTF : "off", gateType, gateN))
         sState := 0
