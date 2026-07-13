@@ -132,17 +132,22 @@ for live, 1% risk default, never >3%) → portfolio. Compare on **CAGR/DD**, not
    **削った"弱い玉"が他レッグとの無相関を担っていた**＝法則6の実例。
    採否は必ずブックのCAGR/DDで裁定する。
 
-## The current surviving book (numbers in auto-memory `project_auto_trade.md`)
-- **gold 1H breakout**（daily-SMA150+slopeゲート, RR3）· **BTC 4H breakout**（RR2＋daily-KAMA-rising）·
-  **BTC 4H EMA pullback**（SMAトレンド, RR3＋週足30MAサイクルゲート）。
-  **3-leg inv-vol CAGR/DD = 2.57**（2026-07-13にトレード解像度DDへ是正＋gold h1の疎データ漏れを修正。
-  旧値 2.91 は月次DD審判＋疎データ込みの数字）。caveat PBO 0.53（レジーム集中）→ live-forward 進行中（再提案しない）。
-  **btc_bo_kama の RR2 は台地でなく細い尾根**（RR2.5で 3.03→2.2台、勝率54.3%/n=70＝真値50%割れの確率≈24%）。
-- **Validated candidates（未採用）:** **btc15m_L**（BTC 15分・ZigZag Pattern-B・押し目指値0.30・RR4.5・
-  **4h-KAMAゲート**・PDHソフト0.5・年99本）· **btc15m_S**（その上下反転。弱気年の中和が仕事）·
-  **gold 15M breakout**（ext-cap 8%+RR4・**セッションスキップは入れない** — 9-15UTC/12-15UTC とも捨てる窓が
-  IS/OOS 両方で黒字＝台帳の記述が誤り, 2026-07-13）· H17-S（gold ORBショート＋daily-SMA80-falling）。
-  6レッグ構成のブック（トレード解像度DD×トレードσ重み, 3%）= **CAGR 63% / maxDD 7.7% / CAGR/DD 8.27**、年203本。
+## The current book — 6 legs, adopted 2026-07-13（全仕様は `README.md`、数字は `project_auto_trade.md`）
+審判＝**トレード解像度DD × トレードRσの逆数（inv-vol）· 総リスク3%**。**年203本 / CAGR +63% / maxDD 7.7% / CAGR/DD 8.27**
+（同じ物差しで旧3レッグは 3.03。想定実DD = 11〜15% ＝ backtest×1.5〜2）。Pine は `pine/<asset>_<tf>_*.pine`。
+
+| leg | 銘柄/TF | 機構 | 出口 | ゲート | 年 |
+|---|---|---|---|---|---|
+| gold_bo | gold 1H | ZigZag(2×ATR) Pattern-B 確定足ブレイク・成行 | RR3 | 日足SMA150↑ | 29 |
+| btc_bo_kama | BTC 4H | 同上 | RR2 | 日足KAMA(14)↑ | 8 |
+| btc_pull | BTC 4H | EMA20押し目（SMA80トレンド） | RR3 | 週足終値 ≤ 30週MA×1.10 | 10 |
+| gold15m | gold 15m | 同ブレイク＋**押し目指値0.25**・ext-cap 8% | RR4 | 日足SMA150↑ | 44 |
+| **btc15m_L** | BTC 15m | 同ブレイク＋**押し目指値0.30**・PDHソフト0.5 | **RR4.5** | **4h**-KAMA(14)↑ | 100 |
+| btc15m_S | BTC 15m | その鏡像（戻り売り指値0.30・前日安値割れ必須） | RR4.0 | **日足**KAMA(14)↓ | 13 |
+
+- **btc15m_L がブックの生命線**（抜くと 8.27→3.62）。**btc_bo_kama は CAGR/DD を上げないが DD を下げる**
+  （同DDに揃えると CAGR +5.3pt ＝リスク・ダイヤルでは代替不可）。**gold15m はセッションスキップ禁止**（捨てる窓が黒字）。
+- ロング/ショートでゲートTF・RRが非対称なのは**測定結果**（ショートに4h/RR4.5は未検証）。
 - **Dead の一覧と経緯は `docs/structural_priors.md` と `docs/verified_findings.md`** — 再テスト前に必ず照合。
 
 ## Where things live

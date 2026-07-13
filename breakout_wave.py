@@ -440,8 +440,11 @@ def run(d: pd.DataFrame, args) -> None:
         e_px, e_bar = e, i
         if pf > 0.0:
             lim = e - pf * (e - stop)
+            # how long the limit stays live. Defaults to fwd (the historical behaviour), but the
+            # Pine cancels after its own fillWin -- pass --fill-win to make the two agree.
+            fw = getattr(args, "fill_win", 0) or args.fwd
             fj = None
-            for j in range(i + 1, min(i + 1 + args.fwd, len(c))):
+            for j in range(i + 1, min(i + 1 + fw, len(c))):
                 if h[j] >= tgt: break                 # ran to target first = missed
                 if l[j] <= lim: fj = j; break
             if fj is None:
@@ -565,6 +568,10 @@ def main() -> None:
                    help="pullback-limit execution: keep the structural stop+fixed target, but "
                         "enter on a limit at e-frac*(e-stop) (0=market; ~0.25-0.3 = validated lever). "
                         "runaway breaks that never pull back are skipped (adverse selection).")
+    p.add_argument("--fill-win", type=int, default=0,
+                   help="bars the pullback limit stays live before it is cancelled (0 = use --fwd, "
+                        "the historical default). The Pine strategies cancel after their own "
+                        "fillWin, so set this to the same number to compare like with like.")
     p.add_argument("--max-pos", type=int, default=1,
                    help="max concurrent positions (default 1 = historical single-slot behaviour); "
                         "each position risks its own 1R, so account risk stacks on overlap")

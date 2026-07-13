@@ -1,18 +1,24 @@
 //@version=5
 // =============================================================================
 //  [GOLD 15M]  Breakout Wave -- Pattern B (3rd-wave) -- ZigZag / RR4 + daily gate
-//              + extension-cap.  15M chart, long-only.
+//              + extension-cap + PULLBACK-LIMIT entry.  15M chart, long-only.
 //
-//  ロジック（手法B = 第3波ブレイク）:
+//  ロジック（手法B = 第3波ブレイク、押し目指値執行）:
 //    波の検出 : オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）。
 //    骨格     : L0(安)->H1(高=1波天井)->L2(安) で L2>L0（higher low）。H1>80EMA（任意ゲート）。
-//    エントリ : L2 確定後、足が H1 を「終値で」上抜け＋日足ゲートON＋extension<=cap なら発注（次足始値）。
-//    損切り   : L2（2波安値）。利確: 損切り幅 × RR（既定 1:4）。サイズ: 1トレード = 資金の riskPct%。
+//    トリガ   : L2 確定後、足が H1 を「終値で」上抜け＋日足ゲートON＋extension<=cap なら "武装"。
+//    エントリ : 成行で飛び乗らず、ブレイク終値 e・損切 L2・risk=e-L2 に対し
+//               lim = e - frac*risk（既定 frac0.25）に指値。押しが lim に来たら約定。
+//               来る前に target へ走り抜けたら見送り（＝強ブレイクの取り逃し＝逆選択の税）。
+//               frac=0 にすると従来の成行エントリーに戻る。
+//    損切り   : L2（2波安値、価格固定）。利確: e + RR×risk（価格固定、既定 1:4）。
+//               指値を下げるぶん実効RRは膨らむ。サイズ: 1トレード = 資金の riskPct%（risk=lim-L2）。
 //    日足ゲート: 前日確定 close > 上向き日足SMA のときだけ。extension-cap: 前日 close が
 //               日足SMA より extCap% 超で上なら見送り。
-//    セッション・スキップ（任意・既定OFF）: 指定時間帯（既定 9-15、ブローカー時計＝UTC）の
-//               ブレイクを見送る。フィックス/指標前の往復ビンタ帯でダマシ・ブレイク失敗が多い
-//               時間を外す用途。境界は厳密最適化せず広めのプラトー窓で使うこと。
+//    セッション・スキップ: **既定OFFのまま使うこと。** 「gold は米指標窓(12-15 UTC)を避ける」は
+//               別戦略から来た一般則で、このレッグには当てはまらない。捨てる窓は IS/OOS 両方で
+//               黒字（12-15UTC: PF 2.28・9-15UTC: PF 1.90）で、13-14時はこのレッグの最良時間帯の
+//               ひとつ。ONにすると黒字トレードを捨てることになる。
 //
 //  no-lookahead: 日足は close[1]/sma[1]（前日確定）+ lookahead_off。extension も同じ前日値。
 //  運用上の注意 : 1%リスク上限・実DDはバックテストの1.5-2倍想定。スワップ未計上、終値計算→
@@ -36,6 +42,8 @@ useGate  = input.bool(true, "Require wave-1 high above trend EMA")
 rr       = input.float(4.0, "Reward : Risk",          step = 0.5, minval = 0.5)
 boWindow = input.int(20,    "Breakout window (bars after wave-2 low)", minval = 1)
 riskPct  = input.float(1.0, "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
+pbFrac   = input.float(0.25, "Pullback-limit depth (entry = e - frac*risk; 0 = market entry)", step = 0.05, minval = 0.0, maxval = 0.95)
+fillWin  = input.int(200,   "Pullback-limit fill window (bars; cancel if unfilled)", minval = 1)
 useDaily = input.bool(true, "Daily SMA regime gate (longs only when daily close > rising SMA)")
 dSmaLen  = input.int(150,   "Daily SMA length (regime gate)", minval = 1)
 dSlopeK  = input.int(10,    "Daily SMA slope lookback (rising over k days; 0=off)", minval = 0)
@@ -149,18 +157,50 @@ if not na(zzExt[1]) and zzExt != zzExt[1]
 if armed and (bar_index - armBar) > boWindow
     armed := false
 
-// ----- entry: confirmed close above H1, daily gate + extension cap, risk-sized -
+// ----- entry: confirmed close above H1 -> PULLBACK LIMIT (do not chase at market) ----
+// 損切り(L2)・利確(e+rr*risk) は「ブレイク終値 e」を基準に固定したまま、エントリーだけ
+// lim = e - pbFrac*risk へ下げる。押しが lim に来たら約定、来る前に target へ走り抜けたら
+// 見送り（＝強ブレイクの取り逃し＝逆選択の税。これを取りに行くと期待値が落ちる）。
+// pbFrac = 0 にすると従来の成行エントリーに戻る。
+var bool  pend    = false
+var float pLim    = na
+var float pStop   = na
+var float pTgt    = na
+var float pU      = na       // realized risk = lim - stop（サイズはこちらで測る）
+var int   pBar    = na
 var float curStop = na
 var float curTgt  = na
-if armed and flat and bar_index > armBar and close > armH1
+
+if armed and flat and not pend and bar_index > armBar and close > armH1
     if dailyOk and kamaOk and extOk and sessOk
-        risk = close - armL2
-        if risk > 0
-            curStop := armL2
-            curTgt  := close + rr * risk
-            qty = math.ceil((strategy.equity * riskPct) / risk * 100) / 100  // 0.01ロット刻みに切り上げ
-            strategy.entry("L", strategy.long, qty = qty)
+        e    = close
+        risk = e - armL2
+        lim  = e - pbFrac * risk
+        if risk > 0 and lim > armL2
+            pLim  := lim
+            pStop := armL2
+            pTgt  := e + rr * risk
+            pU    := lim - armL2
+            pBar  := bar_index
+            pend  := true
     armed := false
+
+// 待機中: 指値を出し続ける。target に先に到達したら見送り、fillWin 本で失効。
+if pend and flat
+    qty = math.ceil((strategy.equity * riskPct) / pU * 100) / 100   // 0.01ロット刻みに切り上げ
+    strategy.entry("L", strategy.long, qty = qty, limit = pLim)
+    if high >= pTgt
+        strategy.cancel("L")
+        pend := false
+    else if bar_index - pBar >= fillWin
+        strategy.cancel("L")
+        pend := false
+
+// 約定したら出口を確定
+if strategy.position_size > 0 and pend
+    pend    := false
+    curStop := pStop
+    curTgt  := pTgt
 
 if strategy.position_size > 0
     strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
@@ -176,5 +216,11 @@ plot(armed ? armH1 : na, "Armed H1 (break line)", color = color.new(color.orange
      style = plot.style_linebr, linewidth = 1)
 plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
      style = plot.style_linebr, linewidth = 1)
-plotshape(armed and flat and bar_index > armBar and close > armH1, title = "Breakout",
+plot(pend ? pLim : na, "Pullback limit (working order)", color = color.new(color.aqua, 0),
+     style = plot.style_linebr, linewidth = 1)
+brkNow = armed and flat and not pend and bar_index > armBar and close > armH1 and dailyOk and kamaOk and extOk and sessOk
+plotshape(brkNow, title = "Breakout (place the pullback limit)",
      style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
+alertcondition(brkNow, title = "GOLD 15M breakout -- place pullback limit",
+     message = "GOLD 15M: Pattern-B break confirmed. Place a BUY LIMIT at e - frac*(e - L2); "
+               + "stop = L2, target = e + RR*(e - L2).")
