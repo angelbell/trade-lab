@@ -1,8 +1,16 @@
 //@version=5
 // =============================================================================
-//  [BTC 15M]  Swing Breakdown -- Pattern B mirror (lower-high) -- ZigZag / RR4
+//  [BTC 15M]  Swing Breakdown -- Pattern B mirror (lower-high) -- ZigZag / RR4.5
 //             + KAMA-falling gate + PDL new-low filter + RALLY-LIMIT entry.
 //             15M chart, short-only. ロングレッグ（btc_15m_swing_breakout_zigzag）の鏡像。
+//
+//  ⚠️ ロングと非対称なのは意図的（測定結果）。BTC には上昇ドリフトがあるので、
+//     ドリフトと逆向きのショートは「ハードルを上げる」側が正しい:
+//       ゲート = 日足（遅い）。4時間足にすると弱気年の稼ぎは増えるが、強気相場の押し目を
+//                全部ショートしに行くので平時に出血し、ブックは劣後する。
+//       PDL   = ハード・フィルタ（前日安値割れ必須）。ロング側の「見送るな、小さく張れ」は
+//                ショートでは逆効果（ソフト化するとブックが単調に悪化）。
+//       RR    = 4.5（ここだけロングと同じ。台地 4.25-4.75 の中）。
 //
 //  ロジック（下方ブレイク、戻り売り指値執行）:
 //    波の検出 : オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）。
@@ -37,7 +45,7 @@ zzK      = input.float(2.0,  "ZigZag reversal (ATR)", step = 0.25, minval = 0.5)
 atrLen   = input.int(14,     "ATR length", minval = 1)
 trendLen = input.int(80,     "Trend EMA (gate)", minval = 1)
 useGate  = input.bool(true,  "Require wave-1 low below trend EMA")
-rr       = input.float(4.0,  "Reward : Risk (fixed target level)", step = 0.5, minval = 0.5)
+rr       = input.float(4.5,  "Reward : Risk (fixed target level)", step = 0.5, minval = 0.5)
 boWindow = input.int(20,     "Breakdown window (bars after wave-2 high)", minval = 1)
 riskPct  = input.float(1.0,  "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
 pbFrac   = input.float(0.30, "Rally-limit depth (entry = e + frac*risk)", step = 0.05, minval = 0.0, maxval = 0.95)
