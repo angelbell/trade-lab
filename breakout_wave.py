@@ -76,10 +76,24 @@ def swings_zigzag(h, l, atr, k):
     out = []
     direction = 0          # +1 = currently in an up leg (tracking a high), -1 = down leg
     ext_p = h[0]; ext_i = 0
+    seed_hi_p, seed_hi_i = h[0], 0     # while direction == 0 BOTH extremes must be tracked
+    seed_lo_p, seed_lo_i = l[0], 0     # separately, or ext_p oscillates and never accumulates
     for i in range(1, len(h)):
         if np.isnan(atr[i]) or atr[i] <= 0:
             continue
         thr = k * atr[i]
+        if direction == 0:                       # not yet seeded: which way does the first leg run?
+            if h[i] > seed_hi_p:
+                seed_hi_p, seed_hi_i = h[i], i
+            if l[i] < seed_lo_p:
+                seed_lo_p, seed_lo_i = l[i], i
+            if seed_hi_p - l[i] >= thr:          # fell k*ATR off the running high -> that was a high
+                out.append((i, seed_hi_i, seed_hi_p, +1))
+                direction = -1; ext_p, ext_i = l[i], i
+            elif h[i] - seed_lo_p >= thr:        # rose k*ATR off the running low -> that was a low
+                out.append((i, seed_lo_i, seed_lo_p, -1))
+                direction = +1; ext_p, ext_i = h[i], i
+            continue
         if direction >= 0:                       # tracking a swing HIGH
             if h[i] > ext_p:
                 ext_p, ext_i = h[i], i
