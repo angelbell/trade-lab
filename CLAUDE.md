@@ -29,7 +29,12 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
   `research/` scripts already `sys.path.insert` the project root). Keeps MT5 broker-server
   time as the clock so HTF bins align. Auto-drops feed-glitch bars (stderr warning).
 - Data (Vantage feed = what the user actually trades; validate on THIS, not the chart feed):
-  - gold: `data/vantage_xauusd_{h1,m15,m5,m1}.csv`（h1/m15 は 2007→だが 2017 以前は極端に疎＝実質 2018-）
+  - gold: `data/vantage_xauusd_{h1,m15,m5,m1}.csv`（h1/m15 は 2007→だが 2017 以前は極端に疎＝実質 2018-。
+    **gold h1 は必ず `--start 2018-01-01` を付ける**：2026-07-13 の swings_zigzag 修正で疎データ領域にも
+    トレードが出るようになり、付けないと IS/OOS が汚染される）
+  - 週足（2026-07-13 にブリッジで取得）: `vantage_{eurusd,usdjpy}_w1`(1971→)· `{gbpusd,audusd,nzdusd,usdcad}_w1`
+    (1993-94→)· `{xauusd,btcusd}_w1`(2017→)。※EURUSD 1999以前・USDJPY 1973以前は合成/固定相場につき使用禁止。
+    銘柄名注意: ターミナル上の gold は **`XAUUSD+`**（`XAUUSD` は存在しない）。
   - BTC: `vantage_btcusd_{h1,m15,m5}.csv` (2017→) · USDJPY: `{h1,h4,d1,m15,m5,m1}` (h1 2000→26.5yr)
   - FX majors (eurusd/gbpusd/audusd/nzdusd/usdcad): `{m15,h1,h4,d1}` all 2000→2026 (26.5yr)
   - The file is the source of truth for spans, not these notes. Resample inside scripts via `--tf 4h`.
@@ -68,7 +73,12 @@ Most tools report `n, win%, PF, meanR, totR, IS/OOS, maxDD` and `--peryear`. Cos
 5. **Per-year/era spread.** Profit in one era = beta, not edge.
 6. **Cost realism** — but judge in order: 素の率×幅→偶然性→コスト→口座寄与。「エッジ無し」と「エッジ有・コスト死」は別ラベル。
 7. **Selection rules (caps/1日N回) are luck-sorters** — always compare to base. Within-leg filters must beat the
-   **CAGR/DD** random-drop null (not just meanR).
+   **CAGR/DD** random-drop null (not just meanR). **だが random-drop null は必要条件どまり** — それは「同じ価格経路
+   の上でランダムに削るよりマシか」しか訊いていない。**巡回ブロック・ブートストラップ（1/3/6/12か月）も必ず通す**
+   （「別の月の並びでも成り立つか」）。真の改善はブロックを長くするほど勝率が上がり、経路当てはめは上がらない
+   （2026-07-13: 週足ERゲートは random-drop 100%ile → ブロック34〜52%＝コイン投げで死亡）
+   **これは leg だけでなく BOOK の CAGR/DD にも適用する** — ブックの月次リターンも単一経路であり、
+   12.03 vs 13.26 のような差はブートストラップで初めて意味が付く（2026-07-13 に自分の判定を検算して発覚）。
 8. **Feed-dependence** — validate on Vantage, not the TV chart feed.
 9. **Beta check** — long-only in a secular bull = beta; demand short side / another instrument.
 10. **No lookahead** — HTF via shift/confirm-later; next-bar-open fill; intrabar SL/TP. **外部データ(UTC)を
@@ -92,6 +102,17 @@ for live, 1% risk default, never >3%) → portfolio. Compare on **CAGR/DD**, not
 6. エッジと独立性はトレードオフ（エッジ有=金属クラスタで冗長、独立=イベント駆動でエッジ無し）。
 7. トレンド正典のprimitive（breakout/MA/TSMOM）は全て検証済み。残る軸=新entry族・WHENの粒度・執行。
 8. 静的inv-volに勝つ動的配分レバーは未発見。equity-gate・レッグ間モメンタムとも死。
+   （2026-07-13: 初の例外**候補** — 「BTCが直近4週間で走った直後の btc15m_L の玉を半分にする」がブック
+   CAGR/DD 12.03→12.70、ブロック・ブートストラップ P 63→78%・台地15/15。**削るのは黒字トレードで、利得は
+   純粋に分散**。未採用、判定はユーザー。詳細 `docs/findings/s07_sizing.md`）
+9. **トレンドのレッグは「老いない」**（2026-07-13, gold/BTC/FX6ペア×4h/1d/週足×4時代）。残り巡行幅の平均は
+   レッグの年齢に依存しない（2.15→2.02で平坦。中央値の低下は検出器バイアスで、帰無も同じだけ下がる）。
+   ∴「そろそろ終わる」判断（時間ストップ・サイクル年齢ゲート・伸びたから利確）は全て機構的に無効。
+   **遠い固定目標が最適**であることの理由であり、btc15m_L の RR4.0→4.5 の根拠。
+   系: **入口の「強さ」は"どこまで伸びるか"を予言しない（＝目標の変数でない）、"機能するか"を予言する（＝サイズの変数）**。
+10. **レッグの改善 ≠ ブックの改善。** 統計監査（DSR/PBO）に全通過してもブックで落ちる（2026-07-13, HH4Hサイズ:
+   レッグCAGR/DD 1.99→3.02 だがブック 8.55→6.96）。**削った"弱い玉"が他レッグとの無相関を担っていた**＝法則6の実例。
+   採否は必ずブックのCAGR/DDで裁定する。
 
 ## The current surviving book (numbers in auto-memory `project_auto_trade.md`)
 - **gold 1H breakout**（daily-SMA150+slopeゲート, RR3）· **BTC 4H breakout**（RR2＋daily-KAMA-rising）·
