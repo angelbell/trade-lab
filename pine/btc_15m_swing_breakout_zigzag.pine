@@ -1,26 +1,27 @@
 //@version=5
 // =============================================================================
-//  [BTC 15M]  Breakout Wave -- Pattern B (3rd-wave) -- ZigZag / RR4
-//             + daily-KAMA gate + PULLBACK-LIMIT entry.  15M chart, long-only.
+//  [BTC 15M]  Breakout Wave -- Pattern B (3rd-wave) -- ZigZag / RR4.5
+//             + 4H-KAMA gate + PULLBACK-LIMIT entry.  15M chart, long-only.
 //
 //  ロジック（手法B = 第3波ブレイク、押し目指値執行）:
 //    波の検出 : オンライン ZigZag（zzK*ATR 逆行で確定、リペイント無し）。
 //    骨格     : L0(安)->H1(高=1波天井)->L2(安) で L2>L0（higher low）。H1>80EMA（任意ゲート）。
 //    レジーム : KAMA(14)が前バーまで上向き（ER自己適応＝BTCのボラに合う。SMA固定ゲートは不可）。
-//               ゲートTFは入力（D=遅い/守り、240=速い/攻め。速い方はベアラリーに騙されやすい）。
-//    トリガ   : L2 確定後、足が H1 を「終値で」上抜け＋日足KAMA上向きなら "武装"。
+//               ゲートTF既定=240（4時間足）。D にすると本数が減り滑らかになるがブック審判では劣後。
+//               4H側は弱気相場の戻りで騙されやすい（弱気年の出血は構造的で、ゲートでは消せない）。
+//    トリガ   : L2 確定後、足が H1 を「終値で」上抜け＋ゲートTFのKAMA上向きなら "武装"。
 //    エントリ : 成行で飛び乗らず、ブレイク終値 e・損切 L2・risk=e-L2 に対し
 //               lim = e - frac*risk（既定 frac0.3）に指値。押しが lim に来たら約定。
 //               来る前に target へ走り抜けたら見送り（＝強ブレイクの取り逃し＝逆選択の税）。
 //    玉サイズ : 前日高値(PDH)との位置で二段。ブレイク終値が PDH より上（新値圏＝頭上に
 //               前日の売り物が無い）ならフル玉、前日レンジ内なら insideW 倍（既定0.5、
 //               0にするとレンジ内は見送り）。レンジ内ブレイクは頭上供給に食われやすい。
-//    損切/利確: 損切=L2（価格固定）、利確=e+RR*risk（価格固定、既定RR4）。指値を下げるぶん
-//               実効RRは膨らむ（reward↑/risk↓）。サイズ: 1トレード=資金 riskPct%（risk=lim-L2）、
-//               BTC最小0.01ロット刻みに切り上げ（リスク許容5%内、取りこぼし回避）。
-//    ラチェット : 含み益が TP2*u に届いたら損切を TP1*u へ引き上げ（u=lim-L2）。早利確はせず全量を
-//               最終targetまで走らせる＝runnerは削らず、TP2到達後に往復ビンタで負けに戻る分だけ救う。
-//               DDを削るのが目的（リターンは微減）。gold では有害・BTC 固有の用途。
+//    損切/利確: 損切=L2（価格固定）、利確=e+RR*risk（価格固定、既定RR4.5）。指値を下げるぶん
+//               実効RRは膨らむ（reward↑/risk↓）。目標を近づけると勝ちを切ることになり劣化する
+//               （RR>=4.5 の帯が最良で、RR4.0 は取り逃しが出る）。サイズ: 1トレード=資金 riskPct%
+//               （risk=lim-L2）、BTC最小0.01ロット刻みに切り上げ（リスク許容5%内、取りこぼし回避）。
+//    ラチェット : 既定OFF。含み益が TP2*u に届いたら損切を TP1*u へ引き上げる（u=lim-L2）任意機能。
+//               日足KAMAゲートの下でのみDDを削る。既定の4Hゲートの下では走者を切って損なので使わない。
 //
 //  no-lookahead: KAMAゲート/PDH は [1]（前バー/前日の確定値）+ lookahead_off。終値計算→次足約定で1本ぶんの誤差。
 //  運用上の注意 : long-only。1%リスク上限・実DDはバックテストの1.5-2倍想定。**BTCのスプレッド/
@@ -43,17 +44,17 @@ zzK      = input.float(2.0,  "ZigZag reversal (ATR)", step = 0.25, minval = 0.5)
 atrLen   = input.int(14,     "ATR length", minval = 1)
 trendLen = input.int(80,     "Trend EMA (gate)", minval = 1)
 useGate  = input.bool(true,  "Require wave-1 high above trend EMA")
-rr       = input.float(4.0,  "Reward : Risk (fixed target level)", step = 0.5, minval = 0.5)
+rr       = input.float(4.5,  "Reward : Risk (fixed target level)", step = 0.5, minval = 0.5)
 boWindow = input.int(20,     "Breakout window (bars after wave-2 low)", minval = 1)
 riskPct  = input.float(1.0,  "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
 pbFrac   = input.float(0.30, "Pullback-limit depth (entry = e - frac*risk)", step = 0.05, minval = 0.0, maxval = 0.95)
 fillWin  = input.int(200,    "Pullback-limit fill window (bars; cancel if unfilled)", minval = 1)
 useKama  = input.bool(true,  "KAMA-rising regime gate (BTC's gate)")
-kamaTf   = input.timeframe("D", "KAMA gate timeframe (D = slow/defensive, 240 = fast/aggressive)")
+kamaTf   = input.timeframe("240", "KAMA gate timeframe (240 = the book's leg; D = slower/fewer trades)")
 kamaLen  = input.int(14,     "KAMA length", minval = 2)
 usePdh   = input.bool(true,  "PDH sizing (full size only above prior-day high)")
 pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks)", step = 0.25, minval = 0.0, maxval = 1.0)
-useRatch = input.bool(true,  "TP2->TP1 stop ratchet (BTC DD-management)")
+useRatch = input.bool(false, "TP2->TP1 stop ratchet (only helps under the DAILY KAMA gate; harmful under 240)")
 tp2Rr    = input.float(3.5,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
 ratToRr  = input.float(2.0,  "Ratchet stop-to level TP1 (in R; 0 = breakeven)", step = 0.5, minval = 0.0)
 showZZ   = input.bool(true,  "ZigZag: draw the swing line", group = "ZigZag drawing")
