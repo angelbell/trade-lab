@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.data_loader import load_mt5_csv
+from src.data_loader import load_mt5_csv, GOLD_H1_START
 from breakout_wave import run, resample
 from ema_pullback import run as run_pullback
 
@@ -38,7 +38,10 @@ BASE = dict(pattern="B", sl_mode="line", sl_buf=0.25, swing="zigzag", zz_k=2.0,
 
 def get_trades(csv, tf, **over):
     args = SimpleNamespace(**{**BASE, **over, "csv": csv, "tf": tf, "risk": over.get("risk", 0.01)})
-    d = resample(load_mt5_csv(csv), tf)
+    d = load_mt5_csv(csv)
+    if "xauusd_h1" in csv:
+        d = d.loc[GOLD_H1_START:]          # pre-2018 gold H1 is daily data wearing an H1 label
+    d = resample(d, tf)
     print(f"\n[{os.path.basename(csv)} {tf}]")
     t = run(d, args)
     return t[["time", "R", "hold"]].copy() if t is not None else None

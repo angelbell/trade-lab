@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.data_loader import load_mt5_csv
+from src.data_loader import load_mt5_csv, GOLD_H1_START
 from breakout_wave import run as run_bo, resample
 from ema_pullback import run as run_pb
 from research.regime_gate_lab import CFG, at
@@ -58,7 +58,7 @@ def cycle_gate_pull(t, maxext=0.10, cyclelen=30):
 
 def get_legs():
     """The validated book legs as (time,R) frames. Reused by allocation/vol-target research."""
-    gold = run_bo(resample(load_mt5_csv("data/vantage_xauusd_h1.csv"), "1h"),
+    gold = run_bo(resample(load_mt5_csv("data/vantage_xauusd_h1.csv").loc[GOLD_H1_START:], "1h"),
                   SimpleNamespace(**{**CFG, "csv": "x", "tf": "1h", "rr": 3.0, "fwd": 500,
                                      "daily_sma": 150, "daily_slope_k": 10}))[["time", "R"]]
     btc = run_bo(resample(load_mt5_csv("data/vantage_btcusd_h1.csv"), "4h"),

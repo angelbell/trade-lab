@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.stats import norm, skew, kurtosis
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.data_loader import load_mt5_csv
+from src.data_loader import load_mt5_csv, GOLD_H1_START
 from breakout_wave import run as run_bo, resample
 from research.regime_gate_lab import CFG
 from research.portfolio_kama import get_legs
@@ -77,7 +77,10 @@ def part_a(legs, Vmap):
 # ============================== Part B: PBO via CSCV ==============================
 def build_grid(csv, tf):
     """run the breakout param grid once -> (monthly matrix MxN, per-trial SR array for V)."""
-    d = resample(load_mt5_csv(csv), tf)
+    d = load_mt5_csv(csv)
+    if "xauusd_h1" in csv:
+        d = d.loc[GOLD_H1_START:]          # pre-2018 gold H1 is daily data wearing an H1 label
+    d = resample(d, tf)
     cols, srs = {}, []
     cid = 0
     for zz, te, rr, ds in itertools.product([1.5, 2.0, 2.5], [0, 50, 80, 120],

@@ -79,12 +79,25 @@ Most tools report `n, win%, PF, meanR, totR, IS/OOS, maxDD` and `--peryear`. Cos
    （2026-07-13: 週足ERゲートは random-drop 100%ile → ブロック34〜52%＝コイン投げで死亡）
    **これは leg だけでなく BOOK の CAGR/DD にも適用する** — ブックの月次リターンも単一経路であり、
    12.03 vs 13.26 のような差はブートストラップで初めて意味が付く（2026-07-13 に自分の判定を検算して発覚）。
-8. **Feed-dependence** — validate on Vantage, not the TV chart feed.
-9. **Beta check** — long-only in a secular bull = beta; demand short side / another instrument.
-10. **No lookahead** — HTF via shift/confirm-later; next-bar-open fill; intrabar SL/TP. **外部データ(UTC)を
+   🚨 **ただしブートストラップの前に、その CAGR/DD の分母が本物かを見ろ**（下の 8 番）。
+8. **🚨 ブックの maxDD は必ずトレード（or 日次）解像度で測る — 月次資産曲線で測ってはならない。**
+   月次に潰すと月内で完結するDDが全部消える。2026-07-13: 6レッグ・ブックの maxDD が **3.62%＝2019-07の単月**
+   （CAGR 43.6% ＝ Calmar 12 の非現実値）に化け、CAGR/DD が「最悪の1か月をどれだけ薄められたか」の指標になり、
+   その上で下した判定の**順位が全部入れ替わった**（トレード解像度では DD 6.53%・CAGR/DD 6.84）。
+   3レッグ時代は月次7.81% vs 日次7.80%で一致していた（月に数本しか建てないため）＝**高頻度レッグ（15分足）を
+   足した瞬間に壊れる**。正典 `research/portfolio_alloc.py: cagr_dd_monthly()` に同じ欠陥（未修正）。
+   新審判＝`scratchpad/book_arbiter_v2.py: trade_book()`。
+   **同じ根（月次に潰すこと）の兄弟バグ: inv-vol を「月次σ」で計算すると低頻度レッグが過大な玉を貰う**
+   （「建てない月＝ゼロ」を"低ボラ＝安全"と誤読する）。btc_bo_kama(70本/7年)=1トレード口座1.006% vs
+   btc15m_L(758本)=0.231% ＝4.4倍の格差。6レッグ・ブックの重み総当たり: 月次σ逆数(現行)6.84 /
+   **トレードRのσ逆数 8.19** / 頻度調整 8.35 / 逆向きダミー4.69（＝機構の確認）。
+   **頻度の違うレッグを混ぜる時は、重みをトレードRのσで出す**（詳細 `docs/findings/s07_sizing.md`）。
+9. **Feed-dependence** — validate on Vantage, not the TV chart feed.
+10. **Beta check** — long-only in a secular bull = beta; demand short side / another instrument.
+11. **No lookahead** — HTF via shift/confirm-later; next-bar-open fill; intrabar SL/TP. **外部データ(UTC)を
     Vantage CSV(ブローカー時刻=EET/EEST=UTC+2/+3)に結合する時は必ずtz変換**（`tz_convert("Europe/Riga")`）。
     素で突き合わせると窓の後半が未来になる（2026-07-12にフロー退出の🟢判定3件がこれで死んだ）。検算＝リターン相関のラグ探索。
-11. **Log every try (incl. failures)** — multiple comparisons raise the bar. Don't loop until good results.
+12. **Log every try (incl. failures)** — multiple comparisons raise the bar. Don't loop until good results.
 
 Workflow: mechanize faithfully → full history all-signals `--peryear` → checklist → not-one-era-beta →
 `overfit_audit.py`（necessary, not sufficient — live-forward decides regime-change）→ sizing (CAGR/DD, DD×1.5–2
@@ -102,24 +115,34 @@ for live, 1% risk default, never >3%) → portfolio. Compare on **CAGR/DD**, not
 6. エッジと独立性はトレードオフ（エッジ有=金属クラスタで冗長、独立=イベント駆動でエッジ無し）。
 7. トレンド正典のprimitive（breakout/MA/TSMOM）は全て検証済み。残る軸=新entry族・WHENの粒度・執行。
 8. 静的inv-volに勝つ動的配分レバーは未発見。equity-gate・レッグ間モメンタムとも死。
-   （2026-07-13: 初の例外**候補** — 「BTCが直近4週間で走った直後の btc15m_L の玉を半分にする」がブック
-   CAGR/DD 12.03→12.70、ブロック・ブートストラップ P 63→78%・台地15/15。**削るのは黒字トレードで、利得は
-   純粋に分散**。未採用、判定はユーザー。詳細 `docs/findings/s07_sizing.md`）
+   （2026-07-13: 「BTCが直近4週間で走った直後は玉を減らす」が例外候補に見えたが、**月次DD審判のアーティファクト**
+   で撤回。トレード解像度の審判では 6.84→6.84 の同値、ブロックを伸ばすとPが50%へ縮む。反証チェックリスト8を参照。
+   銘柄レベル（BTC4レッグ全部）への一般化も失敗＝コイン投げ）
 9. **トレンドのレッグは「老いない」**（2026-07-13, gold/BTC/FX6ペア×4h/1d/週足×4時代）。残り巡行幅の平均は
    レッグの年齢に依存しない（2.15→2.02で平坦。中央値の低下は検出器バイアスで、帰無も同じだけ下がる）。
    ∴「そろそろ終わる」判断（時間ストップ・サイクル年齢ゲート・伸びたから利確）は全て機構的に無効。
    **遠い固定目標が最適**であることの理由であり、btc15m_L の RR4.0→4.5 の根拠。
    系: **入口の「強さ」は"どこまで伸びるか"を予言しない（＝目標の変数でない）、"機能するか"を予言する（＝サイズの変数）**。
+   ⚠️ **ただしこれは per-trade の法則であって、ブックの滑らかさの法則ではない**（2026-07-13 に現役3レッグで検証）。
+   RRを伸ばすと meanR/PF は法則どおり上がるが、勝率が下がって資産曲線がゴツゴツになり **CAGR/DD は落ちる**。
+   **遠い目標を採るには頻度が要る**（btc15m_L=年200本超なら均されるが、年6〜12本の4H/1Hレッグでは均されない）。
+   ∴ gold_bo=RR3 / btc_bo_kama=RR2 / btc_pull=RR3 は既に最良で、動かす余地は無かった。
 10. **レッグの改善 ≠ ブックの改善。** 統計監査（DSR/PBO）に全通過してもブックで落ちる（2026-07-13, HH4Hサイズ:
-   レッグCAGR/DD 1.99→3.02 だがブック 8.55→6.96）。**削った"弱い玉"が他レッグとの無相関を担っていた**＝法則6の実例。
+   レッグCAGR/DD 1.99→3.02 だがブックは **6.84→6.20**（トレード解像度審判）で却下）。
+   **削った"弱い玉"が他レッグとの無相関を担っていた**＝法則6の実例。
    採否は必ずブックのCAGR/DDで裁定する。
 
 ## The current surviving book (numbers in auto-memory `project_auto_trade.md`)
 - **gold 1H breakout**（daily-SMA150+slopeゲート, RR3）· **BTC 4H breakout**（RR2＋daily-KAMA-rising）·
-  **BTC 4H EMA pullback**（SMAトレンド, RR3＋週足30MAサイクルゲート）。3-leg inv-vol CAGR/DD ~2.91、
-  caveat PBO 0.53（レジーム集中）→ live-forward 進行中（再提案しない）、BTC族は合計≤parity。
-- **Validated candidates（未採用・live-forward待ち・≤parity）:** gold 15M breakout（ext-cap 8%+RR4、
-  9–15UTCスキップ強化）· H17-S（gold ORBショート＋daily-SMA80-falling）。
+  **BTC 4H EMA pullback**（SMAトレンド, RR3＋週足30MAサイクルゲート）。
+  **3-leg inv-vol CAGR/DD = 2.57**（2026-07-13にトレード解像度DDへ是正＋gold h1の疎データ漏れを修正。
+  旧値 2.91 は月次DD審判＋疎データ込みの数字）。caveat PBO 0.53（レジーム集中）→ live-forward 進行中（再提案しない）。
+  **btc_bo_kama の RR2 は台地でなく細い尾根**（RR2.5で 3.03→2.2台、勝率54.3%/n=70＝真値50%割れの確率≈24%）。
+- **Validated candidates（未採用）:** **btc15m_L**（BTC 15分・ZigZag Pattern-B・押し目指値0.30・RR4.5・
+  **4h-KAMAゲート**・PDHソフト0.5・年99本）· **btc15m_S**（その上下反転。弱気年の中和が仕事）·
+  **gold 15M breakout**（ext-cap 8%+RR4・**セッションスキップは入れない** — 9-15UTC/12-15UTC とも捨てる窓が
+  IS/OOS 両方で黒字＝台帳の記述が誤り, 2026-07-13）· H17-S（gold ORBショート＋daily-SMA80-falling）。
+  6レッグ構成のブック（トレード解像度DD×トレードσ重み, 3%）= **CAGR 63% / maxDD 7.7% / CAGR/DD 8.27**、年203本。
 - **Dead の一覧と経緯は `docs/structural_priors.md` と `docs/verified_findings.md`** — 再テスト前に必ず照合。
 
 ## Where things live

@@ -15,6 +15,16 @@ _MEDIAN_WINDOW = 11      # centered rolling-median window for the spike test
 _SPIKE_DEV = 0.5         # flag close that deviates >50% from the local median
 _MAX_BAR_RATIO = 3.0     # flag a single bar whose high/low ratio exceeds this
 
+# --- sparse-history guard -----------------------------------------------------
+# Vantage gold H1 carries labels back to 2007, but before 2018 the feed delivers only
+# ~250-300 bars/year (vs ~5900 after) -- i.e. it is DAILY data wearing an H1 label, not
+# thin H1 data. Any intraday detector run over it produces trades from bars that never
+# existed. Slice gold H1 at this date in anything that builds a book or a leg:
+#     load_mt5_csv("data/vantage_xauusd_h1.csv").loc[GOLD_H1_START:]
+# Not applied inside load_mt5_csv on purpose: some research deliberately reads the full
+# span (e.g. multi-era resamples), and a silent truncation there would be worse.
+GOLD_H1_START = "2018-01-01"
+
 CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 

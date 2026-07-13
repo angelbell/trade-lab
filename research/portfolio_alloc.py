@@ -38,7 +38,14 @@ def monthly_matrix(legs):
 
 
 def cagr_dd_monthly(ret):
-    """ret: monthly portfolio return series (already in account-% terms). -> CAGR%, DD%, ratio."""
+    """ret: monthly portfolio return series (already in account-% terms). -> CAGR%, DD%, ratio.
+
+    ⚠️ The DD here is measured on the MONTHLY equity curve, so every drawdown that opens AND
+    closes inside a month is invisible. That is fine for weight SELECTION (below) but it is NOT
+    a drawdown a live account would feel: with a high-frequency leg in the book it collapses
+    maxDD onto 'the worst single month' and CAGR/DD stops meaning anything. Report with
+    cagr_dd_trades() instead. Kept only for w_is_best's IS objective, where the two agree.
+    """
     ret = ret.dropna()
     if len(ret) < 6:
         return 0.0, 0.0, 0.0
@@ -49,18 +56,53 @@ def cagr_dd_monthly(ret):
     return cagr, dd, cagr / max(dd, 1e-9)
 
 
+def trade_series(legs, w_map, scale=None):
+    """All legs' trades merged into one account-return series, in time order.
+
+    w_map: {leg: account fraction risked per 1R}.  scale: optional monthly Series (vol-target
+    leverage), applied to whichever month each trade falls in.
+    """
+    parts = []
+    for name, t in legs.items():
+        s = pd.Series(t.R.values * w_map[name], index=pd.DatetimeIndex(t.time))
+        if scale is not None:
+            k = scale.reindex(s.index.to_period("M").to_timestamp()).values
+            s = s * np.nan_to_num(k, nan=1.0)
+        parts.append(s)
+    return pd.concat(parts).sort_index()
+
+
+def cagr_dd_trades(s):
+    """CAGR%, maxDD%, ratio measured on the TRADE-resolution equity curve.
+
+    This is the arbiter. Monthly aggregation hides intra-month drawdowns entirely; on a book
+    containing a 15m leg that understated maxDD by ~2x and reordered every arm we compared
+    (2026-07-13). Legs trade at wildly different frequencies, so only a trade-ordered curve
+    puts them on the same footing.
+    """
+    s = s.dropna()
+    if len(s) < 10:
+        return 0.0, 0.0, 0.0
+    eq = np.cumprod(1 + s.values)
+    peak = np.maximum.accumulate(eq)
+    dd = ((peak - eq) / peak).max() * 100
+    days = max((s.index[-1] - s.index[0]).days, 1)
+    cagr = (eq[-1] ** (365.25 / days) - 1) * 100
+    return cagr, dd, cagr / max(dd, 1e-9)
+
+
 def port_ret(M, w):
     """portfolio monthly return given per-leg risk weights w (account fraction per unit R)."""
     return (M * w).sum(axis=1)
 
 
-def report(tag, M, w):
-    full = port_ret(M, w)
-    isr = full[full.index.year < SPLIT]
-    oos = full[full.index.year >= SPLIT]
-    cf, df_, rf = cagr_dd_monthly(full)
-    ci, di, ri = cagr_dd_monthly(isr)
-    co, do, ro = cagr_dd_monthly(oos)
+def report(tag, M, w, legs):
+    s = trade_series(legs, dict(zip(M.columns, w)))
+    isr = s[s.index.year < SPLIT]
+    oos = s[s.index.year >= SPLIT]
+    cf, df_, rf = cagr_dd_trades(s)
+    _, _, ri = cagr_dd_trades(isr)
+    _, _, ro = cagr_dd_trades(oos)
     wt = " ".join(f"{x*100:.2f}" for x in w)
     print(f"  {tag:<16} w[{wt}]  FULL CAGR/DD={rf:4.2f} (C{cf:+.0f}/DD{df_:.0f})  "
           f"IS={ri:4.2f}  OOS={ro:4.2f}")
@@ -77,6 +119,19 @@ def w_inv_vol(Mis, budget):
     v = Mis.std().values
     raw = 1.0 / np.where(v > 0, v, np.inf)
     return raw / raw.sum() * budget
+
+
+def w_inv_vol_trade(Mis, budget, legs=None):
+    """inv-vol on TRADE-level R sigma, not monthly sigma.
+
+    Monthly sigma is contaminated by FREQUENCY: a leg that trades 8x/yr has mostly-zero months,
+    so its monthly sigma is small and inv-vol hands it the biggest per-trade size -- 'low vol'
+    that is really 'rarely trades' (2026-07-13: btc_bo_kama got 1.01%/trade vs btc15m_L's 0.23%,
+    a 4.4x gap on legs of similar per-trade risk). Use this whenever the book mixes timeframes.
+    """
+    sig = pd.Series({c: legs[c].R.std() for c in Mis.columns})
+    w = 1.0 / sig
+    return (w / w.sum() * budget).values
 
 
 def w_inv_dd(Mis, budget):
@@ -124,22 +179,27 @@ def simplex_grid(n, step=0.05):
 
 
 # ---------- vol targeting (trailing-vol scaling, no lookahead) ----------
-def vol_target_ret(M, w, window, target, cap=3.0):
-    """each leg scaled monthly by target / trailing-vol(window), shifted (uses past only)."""
-    scaled = pd.DataFrame(index=M.index)
+def vol_target_lev(M, w, window, target, cap=3.0):
+    """per-leg monthly leverage = target / trailing-vol(window), shifted (uses past only)."""
+    lev = pd.DataFrame(index=M.index)
     for j, c in enumerate(M.columns):
-        r = M[c] * w[j]
-        tv = r.rolling(window).std().shift(1)              # trailing, no lookahead
-        lev = (target / tv).clip(upper=cap).fillna(1.0)
-        scaled[c] = r * lev
-    return scaled.sum(axis=1)
+        tv = (M[c] * w[j]).rolling(window).std().shift(1)   # trailing, no lookahead
+        lev[c] = (target / tv).clip(upper=cap).fillna(1.0)
+    return lev
 
 
-def report_vt(tag, M, w, window, target):
-    full = vol_target_ret(M, w, window, target)
+def report_vt(tag, M, w, window, target, legs):
+    lev = vol_target_lev(M, w, window, target)
+    wm = dict(zip(M.columns, w))
+    parts = []
+    for name, t in legs.items():                            # apply each month's leverage per leg
+        s = pd.Series(t.R.values * wm[name], index=pd.DatetimeIndex(t.time))
+        k = lev[name].reindex(s.index.to_period("M").to_timestamp()).values
+        parts.append(s * np.nan_to_num(k, nan=1.0))
+    full = pd.concat(parts).sort_index()
     isr = full[full.index.year < SPLIT]; oos = full[full.index.year >= SPLIT]
-    _, _, rf = cagr_dd_monthly(full)
-    _, _, ri = cagr_dd_monthly(isr); _, _, ro = cagr_dd_monthly(oos)
+    _, _, rf = cagr_dd_trades(full)
+    _, _, ri = cagr_dd_trades(isr); _, _, ro = cagr_dd_trades(oos)
     print(f"  {tag:<16} FULL CAGR/DD={rf:4.2f}  IS={ri:4.2f}  OOS={ro:4.2f}")
     return rf, ro
 
@@ -160,14 +220,15 @@ def main():
         print(f"\n=== {bname}  legs={list(M.columns)}  months={len(M)} "
               f"(IS<{SPLIT}={len(Mis)})  budget={budget*100:.0f}% ===")
         print("  -- LEVER 1: weighting (budget constant; weights from IS, judged OOS) --")
-        schemes = [("equal(book)", w_equal), ("inv_vol", w_inv_vol), ("inv_dd", w_inv_dd),
-                   ("min_var", w_min_var), ("IS_best_CDD", w_is_best)]
+        schemes = [("equal(book)", w_equal), ("inv_vol", w_inv_vol),
+                   ("inv_vol_TRADE", lambda Mi, b: w_inv_vol_trade(Mi, b, blegs)),
+                   ("inv_dd", w_inv_dd), ("min_var", w_min_var), ("IS_best_CDD", w_is_best)]
         for sname, fn in schemes:
-            report(sname, M, fn(Mis, budget))
+            report(sname, M, fn(Mis, budget), blegs)
         print("  -- LEVER 2: vol targeting on equal weights (window plateau; trailing=no leak) --")
         we = w_equal(Mis, budget)
         for win in (6, 9, 12, 18):
-            report_vt(f"voltgt w{win}", M, we, win, target)
+            report_vt(f"voltgt w{win}", M, we, win, target, blegs)
 
 
 if __name__ == "__main__":
