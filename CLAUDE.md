@@ -67,6 +67,7 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
 | `research/regime_discriminator.py` | 任意signalの効く場面/効かない場面を IS→OOS＋random-drop null＋年別ON% で見分ける一次スクリーン |
 | `research/overfit_audit.py` | **MEASURE overfit risk** (Deflated Sharpe + PBO/CSCV + bootstrap-CI/null) — 採用前の標準ゲート |
 | `research/portfolio.py` / `portfolio_alloc.py` | combine legs into one equity curve + annual-R correlations / allocation |
+| `research/book.py` | **正典ブック・パイプライン（2026-07-17）**: 採用6レッグを運用仕様（fill_win200/S=RR4.5/ネットコスト/PDHソフト/PDLハード）で構築し、採用審判（トレード解像度DD×トレードRσ逆数・総3%）で裁定。`get_book_legs()`/`book()`/`w_trade()`。アンカー=206本/年・CAGR+61.0%・maxDD7.74%・**CAGR/DD7.88**。番人=`scratchpad/book_tieback.py`（凍結証拠スクリプトと配列一致12検査）。**ブック裁定の実験は今後これを import する（book_integration 等の手書き再構築は禁止）** |
 | `research/gate_passrate.py` | year-by-year ON% of candidate regime gates |
 | `research/instrument_screen.py` | trend-CHARACTER pre-screen of NEW instruments (PRE-SCREEN only; Vantage H1 = arbiter) |
 
