@@ -35,7 +35,6 @@ import math
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 from src.data_loader import load_mt5_csv
 

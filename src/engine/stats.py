@@ -1,6 +1,28 @@
 """Reporting: the print block of breakout_wave.run(), separated from computation.
-summarize() returns the trade table unchanged (it only prints). Lifted verbatim."""
+metrics() computes the numbers (dict); summarize() prints them and returns the
+trade table unchanged. Print output is byte-identical to the pre-split run()
+(guarded by scratchpad/engine_golden.py)."""
 import numpy as np
+
+
+def metrics(t, rr_real, args):
+    """The quantities summarize() prints, as a dict — so arbiters and reports can
+    share the exact same numbers instead of recomputing their own variants.
+    maxDD here is the single-path trade-resolution DD of the 1-leg equity at
+    args.risk; book-level judgments still go through research/book + engine.arbiter."""
+    yrs = sorted(t["y"].unique()); half = yrs[len(yrs) // 2] if len(yrs) > 1 else None
+    isr = t[t["y"] < half]["R"] if half else t["R"]
+    oosr = t[t["y"] >= half]["R"] if half else t["R"]
+    # real-money equity curve at constant risk%: the true risk across ALL years (incl chop)
+    eq = (1 + args.risk * t["R"]).cumprod()
+    dd = ((eq.cummax() - eq) / eq.cummax()).max() * 100
+    yrs_span = max((t["time"].iloc[-1] - t["time"].iloc[0]).days / 365.25, 0.5)
+    cagr = (eq.iloc[-1] ** (1 / yrs_span) - 1) * 100
+    return dict(n=len(t), win=(t["R"] > 0).mean() * 100, meanR=t["R"].mean(),
+                totR=t["R"].sum(), IS=isr.mean(), OOS=oosr.mean(),
+                medRR=np.median(rr_real), hold_med=t["hold"].median(),
+                hold_max=t["hold"].max(),
+                ret=(eq.iloc[-1] - 1) * 100, cagr=cagr, maxdd=dd)
 
 
 def summarize(t, rr_real, args):
@@ -9,20 +31,13 @@ def summarize(t, rr_real, args):
         for _, r in t.iterrows():
             print(f"{r['time'].isoformat()},{r['R']:.6f},{r['hold']:.6f}")
         return t
-    yrs = sorted(t["y"].unique()); half = yrs[len(yrs) // 2] if len(yrs) > 1 else None
-    isr = t[t["y"] < half]["R"] if half else t["R"]
-    oosr = t[t["y"] >= half]["R"] if half else t["R"]
-    print(f"  n={len(t):>4}  win={(t['R']>0).mean()*100:>3.0f}%  meanR={t['R'].mean():+.2f}  "
-          f"totR={t['R'].sum():+6.0f}  | IS={isr.mean():+.2f} OOS={oosr.mean():+.2f}  "
-          f"| medRR={np.median(rr_real):.2f}  hold(d) med={t['hold'].median():.1f} max={t['hold'].max():.0f}"
+    m = metrics(t, rr_real, args)
+    print(f"  n={m['n']:>4}  win={m['win']:>3.0f}%  meanR={m['meanR']:+.2f}  "
+          f"totR={m['totR']:+6.0f}  | IS={m['IS']:+.2f} OOS={m['OOS']:+.2f}  "
+          f"| medRR={m['medRR']:.2f}  hold(d) med={m['hold_med']:.1f} max={m['hold_max']:.0f}"
           + (f"  [swap {args.swap_pct}%/d]" if args.swap_pct > 0 else ""))
-    # real-money equity curve at constant risk%: the true risk across ALL years (incl chop)
-    eq = (1 + args.risk * t["R"]).cumprod()
-    dd = ((eq.cummax() - eq) / eq.cummax()).max() * 100
-    yrs_span = max((t["time"].iloc[-1] - t["time"].iloc[0]).days / 365.25, 0.5)
-    cagr = (eq.iloc[-1] ** (1 / yrs_span) - 1) * 100
-    print(f"  @risk {args.risk*100:.0f}%/trade: return={ (eq.iloc[-1]-1)*100:+.0f}%  "
-          f"CAGR={cagr:+.1f}%  maxDD={dd:.1f}%  ret/DD={ (eq.iloc[-1]-1)*100/max(dd,1e-9):.2f}")
+    print(f"  @risk {args.risk*100:.0f}%/trade: return={m['ret']:+.0f}%  "
+          f"CAGR={m['cagr']:+.1f}%  maxDD={m['maxdd']:.1f}%  ret/DD={m['ret']/max(m['maxdd'],1e-9):.2f}")
     if args.peryear:
         pos = sum(1 for _, g in t.groupby("y") if g["R"].sum() > 0)
         print("       per-year totR: " + " ".join(
