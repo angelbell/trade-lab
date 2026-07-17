@@ -20,4 +20,5 @@ from .size import (bar_idx, pdh_series, pdl_series, pdh_soft, pdl_break_mask,
                    hh4h_series, pdh_hh4h_ladder, daily_regime_mult,
                    compute_labels, ict_label_mult)
 from .arbiter import BUDGET, cd, Boot, months_union
+from . import walk_ict   # ICT execution model (ask-limit/killzone) — use walk_ict.walk etc.
 from .compat import run_compat, run_ema_compat

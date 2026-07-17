@@ -203,7 +203,7 @@ bash ../mt5-mcp/scripts/run_backtests.sh
 |---|---|
 | `breakout_wave.py` | ブレイクアウト本体（gold_bo / btc_bo_kama / gold15m / btc15m_L / btc15m_S の全部）。2026-07-17 から `src/engine/` への薄い委譲 |
 | `ema_pullback.py` | EMA 押し目本体（btc_pull）。同じく `src/engine/` へ委譲 |
-| `src/engine/` | 分解済みエンジン: gates / detect / plan / walk（唯一の執行ウォーカー）/ stats / size（サイズ写像）/ arbiter（同DD裁定）/ mirror(反転ショート)。編集したら番人3本（`scratchpad/engine_tieback.py`・`engine_golden.py check-run`・`size_tieback.py`）の全PASS必須 |
+| `src/engine/` | 分解済みエンジン: gates / detect / plan / walk（breakout系＋ema）/ walk_ict（ICT系: ASK指値・キルゾーン）/ stats / size（サイズ写像）/ arbiter（同DD裁定）/ mirror(反転ショート)。編集したら番人3本（`scratchpad/engine_tieback.py`・`engine_golden.py check-run`・`size_tieback.py`）の全PASS必須 |
 | `research/portfolio_kama.py` | 現役レッグの定義（`get_legs()`）＋ ブック集計 |
 | `research/portfolio_alloc.py` | 重み付けスキームの比較（**CAGR/DD はトレード解像度**、`inv_vol_TRADE` が正典） |
 | `research/edge_harness.py` | 新シグナルの標準評価ハーネス |
