@@ -1,0 +1,199 @@
+//@version=5
+// =============================================================================
+//  [EURUSD 15M]  ICT 忠実版 — 流動性の狩り + MSS(displacement=FVG) + FVG-CE 入口
+//                + 外部流動性ターゲット(前日高値 PDH).  15M チャート, long-only.
+//
+//  ロジック（すべて NY 壁時計。ロングのみ = 検証で生き残ったのはこの向きだけ）:
+//    セッション : Asia = 前日 19:00→02:00 / London = 02:00→07:00 / NYキルゾーン = 07:00→10:00.
+//    狩り(sweep): London 窓の安値 L が「Asia 安値 or 前日安値」を割る（sell-side 流動性を取る）。
+//    MSS        : L の後、L 直前の 3本フラクタル高値を終値でなく高値で上抜け（構造転換）。
+//                 その上抜け足までの最高値 = H。
+//    displacement: ブレイク脚（フラクタル高値足〜上抜け足）内に bullish FVG
+//                 （c3.low > c1.high）が閾値サイズ(帯幅/ATR ≥ fvgMinAtr)で存在すること。
+//                 FVG が MSS を「本物の勢い」と認める条件（ICT正典: MSS=displacement=FVG）。
+//    入口       : FVG 帯 [c1.high, c3.low] の中点 CE(50%) に買い指値。KZ 内に押しが来たら約定。
+//                 来る前に走り抜けたら見送り（＝深い押しを取り逃す逆選択の税）。
+//    損切       : 狩られた安値 L − 0.1×ATR(14)（価格固定）。
+//    利確       : 前日高値(PDH) − fluff(5pip)（外部流動性の手前。届き切らない前提の遠い実在レベル）。
+//                 ＝任意の固定RR ではなく「価格が実際に向かう構造レベル」。実効RR中央 ~2.75。
+//    無効化     : KZ 到達前/中に L を割ったら設定を捨てる。KZ 終了で未約定はキャンセル。
+//    サイズ     : 1トレード = 資金 riskPct%（risk = CE − 損切）。
+//
+//  no-lookahead: 前日高値は request.security の日足[1]（前日確定）+ lookahead_off。
+//                狩り/MSS/FVG/CE は London 終了(07:00)までに全て確定し、約定は KZ(07-10)。
+//  ⚠️ 移植の注意（重要）: 研究本体は London 窓を一括で見て argmin で狩り位置を決めるバッチ処理。
+//     Pine はバー逐次なので「新安値が出るたび探索をリセット」する等価形で書いてある
+//     （バッチの argmin と収束する）。フラクタルも ta.pivothigh の逐次版。∴ 完全一致ではない —
+//     TradingView 上で研究側の trade 統計（EURUSD 15M で 年 ~12本・勝率 ~34%）と突き合わせて検算すること。
+//  ⚠️ ライブ: CE 入口は損切が狭く（研究で 0.25押し目比 −0.9ATR）スリッページに弱い。約定率も低い
+//     （45-67%）。想定エッジは backtest より薄い前提でサイズは小さく（riskPct 既定 0.5%）。
+//  銘柄固有: この設定（FVG-CE 入口 × PDH 目標）が効いたのは EURUSD ロングのみ。他銘柄へ流用しない。
+// =============================================================================
+strategy("[EURUSD 15M] ICT sweep+MSS+FVG (CE entry, PDH target)",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.percent_of_equity,
+     default_qty_value       = 100,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     commission_type         = strategy.commission.cash_per_order,
+     commission_value        = 0.0)
+
+// ---------------- inputs ----------------
+fvgMinAtr = input.float(0.15, "FVG 最小サイズ (×ATR)", minval=0.0, step=0.05)
+bufAtr    = input.float(0.10, "損切バッファ (×ATR)", minval=0.0, step=0.05)
+fluffPip  = input.float(5.0,  "利確 fluff (pip, PDH の手前)", minval=0.0, step=0.5)
+minRangeA = input.float(0.25, "最小レンジ H-L (×ATR)", minval=0.0, step=0.05)
+riskPct   = input.float(0.5,  "1トレードのリスク (% 資金)", minval=0.1, step=0.1)
+pip       = input.float(0.0001, "1 pip (EURUSD=0.0001)")
+
+// ---------------- NY 壁時計セッション ----------------
+nyH = hour(time, "America/New_York")
+isAsia   = (nyH >= 19) or (nyH < 2)     // 前日 19:00 → 02:00
+isLondon = (nyH >= 2)  and (nyH < 7)    // 02:00 → 07:00
+isKZ     = (nyH >= 7)  and (nyH < 10)   // 07:00 → 10:00
+
+// セッション遷移（前バーの NY 時刻と比較）
+nyH1        = hour(time[1], "America/New_York")
+asiaStart   = isAsia   and not ((nyH1 >= 19) or (nyH1 < 2))
+londonStart = isLondon and not ((nyH1 >= 2) and (nyH1 < 7))
+kzStart     = isKZ     and not ((nyH1 >= 7) and (nyH1 < 10))
+
+atr = ta.atr(14)
+
+// 前日高値 / 前日安値（日足の前バー確定値・先読み無し）
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_off)
+
+// ---------------- Asia 窓の高値・安値を蓄積 ----------------
+var float asiaLo = na
+var float asiaHi = na
+if asiaStart
+    asiaLo := low
+    asiaHi := high
+else if isAsia
+    asiaLo := na(asiaLo) ? low  : math.min(asiaLo, low)
+    asiaHi := na(asiaHi) ? high : math.max(asiaHi, high)
+
+// ---------------- フラクタル高値（3本, 逐次）----------------
+// ta.pivothigh(1,1): 中央足が前後1本より高い＝1本遅れで確定。確定した最新のフラクタル高値を保持。
+ph = ta.pivothigh(high, 1, 1)
+var float lastFracHigh = na
+if not na(ph)
+    lastFracHigh := ph
+
+// ---------------- London 窓: 狩り→MSS→FVG の逐次追跡 ----------------
+// var 状態（当日 London の設定を組み立てる）
+var float sweptLow   = na     // 狩られた安値 L（London の走行最小）
+var float fracAtLow  = na     // L 直前のフラクタル高値レベル
+var bool  swept      = false  // 狩り成立（L が Asia/前日安値割れ）
+var bool  mssDone    = false  // MSS 成立（fracAtLow を高値で上抜け）
+var float runMaxHigh = na     // iL 以降の最高値 H
+var bool  fvgFound   = false  // ブレイク脚内 bullish FVG
+var float fvgLo      = na     // FVG 帯下端 (c1.high)
+var float fvgHi      = na     // FVG 帯上端 (c3.low)
+var float fvgSize    = na     // 採用 FVG のサイズ（帯幅/ATR）— 最大を採る
+
+// London 開始で当日の設定状態をリセット（Pine のユーザー関数は global var を書けないためインライン）
+if londonStart
+    sweptLow   := na
+    fracAtLow  := na
+    swept      := false
+    mssDone    := false
+    runMaxHigh := na
+    fvgFound   := false
+    fvgLo      := na
+    fvgHi      := na
+    fvgSize    := na
+
+// London 中の逐次処理
+if isLondon
+    // 新安値が出たら狩り位置を更新し、探索をリセット（バッチの argmin と収束）
+    if na(sweptLow) or low < sweptLow
+        sweptLow   := low
+        fracAtLow  := lastFracHigh
+        swept      := ((not na(asiaLo)) and low < asiaLo) or ((not na(pdl)) and low < pdl)
+        mssDone    := false
+        runMaxHigh := high
+        fvgFound   := false
+        fvgLo      := na
+        fvgHi      := na
+        fvgSize    := na
+    else
+        runMaxHigh := math.max(runMaxHigh, high)
+        // ブレイク脚内 bullish FVG: c3.low(=今バーの low) > c1.high(=2バー前の high)。
+        // 「構造転換を作った脚」だけを見る＝MSS 確定バーまでで走査を凍結する。
+        // それ以降の押し戻りで出来る無関係な FVG を拾わない（逐次版の撃ちすぎ・逆選択の是正）。
+        // MSS ブロックより前に置くことで、displacement バー(=MSS確定足)の FVG は算入される。
+        if swept and (not na(fracAtLow)) and (not mssDone)
+            gap = low - high[2]
+            if gap > 0
+                sz = gap / atr
+                if sz >= fvgMinAtr and (na(fvgSize) or sz > fvgSize)
+                    fvgSize  := sz
+                    fvgLo    := high[2]     // c1.high
+                    fvgHi    := low         // c3.low
+                    fvgFound := true
+        // MSS: L 直前フラクタル高値を高値で上抜け（確定＝このバー以降 FVG 走査を止める）
+        if swept and (not na(fracAtLow)) and (not mssDone) and high > fracAtLow
+            mssDone := true
+
+// ---------------- London 終了 → 設定を確定して KZ で発注 ----------------
+// 有効条件: 狩り + MSS + FVG + H-L≥minRangeA*ATR + L が割られていない（逐次リセットで担保）
+setupValid = swept and mssDone and fvgFound and (not na(runMaxHigh)) and (not na(sweptLow)) and ((runMaxHigh - sweptLow) >= minRangeA * atr) and (not na(pdh))
+
+var float ceEntry = na
+var float stopPx  = na
+var float tgtPx   = na
+var bool  armed   = false
+
+// KZ 開始バーで設定を凍結・武装
+if kzStart
+    if setupValid
+        ceEntry := (fvgLo + fvgHi) / 2.0     // FVG-CE(50%)
+        stopPx  := sweptLow - bufAtr * atr
+        tgtPx   := pdh - fluffPip * pip
+        // 目標が入口以下（PDH が近すぎ/下）なら見送り
+        armed   := (tgtPx > ceEntry) and (ceEntry > stopPx)
+    else
+        armed := false
+
+inKZ = isKZ
+
+// 保有ポジションの損切・利確を常時維持（PDH まで数日保有しうる＝KZ 外でも exit を生かす）
+if strategy.position_size > 0
+    strategy.exit("X", from_entry="L", stop=stopPx, limit=tgtPx)
+    armed := false     // 約定済み、エントリー武装は解除
+
+// KZ 中: L 割れで無効化（pending 指値もキャンセル）/ さもなくば買い指値を維持
+if armed and inKZ
+    if low < sweptLow
+        strategy.cancel("L")
+        armed := false
+    else
+        risk = ceEntry - stopPx
+        qty  = risk > 0 ? (strategy.equity * (riskPct / 100.0)) / risk : 0.0
+        if qty > 0
+            strategy.entry("L", strategy.long, qty=qty, limit=ceEntry)
+
+// KZ 終了で未約定エントリーをキャンセル・武装解除
+if (not inKZ) and armed
+    strategy.cancel("L")
+    armed := false
+
+// ---------------- 可視化（"リアルで見る"用）----------------
+plot(isLondon ? sweptLow : na, "狩り安値 L", color=color.new(color.red, 0),    style=plot.style_linebr)
+plot(armed    ? ceEntry  : na, "CE 入口",    color=color.new(color.aqua, 0),   style=plot.style_linebr, linewidth=2)
+plot(armed    ? stopPx   : na, "損切",       color=color.new(color.orange, 0), style=plot.style_linebr)
+plot(armed    ? tgtPx    : na, "利確 PDH-",  color=color.new(color.green, 0),  style=plot.style_linebr)
+plot(pdh, "前日高値", color=color.new(color.gray, 60), style=plot.style_stepline)
+
+bgcolor(isKZ ? color.new(color.blue, 92) : na, title="NYキルゾーン")
+bgcolor(isLondon ? color.new(color.purple, 94) : na, title="London")
+
+// FVG 帯の塗り（武装中）
+p1 = plot(armed ? fvgLo : na, "FVG下", color=color.new(color.aqua, 80))
+p2 = plot(armed ? fvgHi : na, "FVG上", color=color.new(color.aqua, 80))
+fill(p1, p2, color=color.new(color.aqua, 88), title="FVG 帯")
+
+alertcondition(armed and isKZ, "ICT 設定 武装", "EURUSD 15M: 狩り+MSS+FVG 成立、CE 買い指値を武装")

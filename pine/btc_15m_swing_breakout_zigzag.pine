@@ -53,7 +53,10 @@ useKama  = input.bool(true,  "KAMA-rising regime gate (BTC's gate)")
 kamaTf   = input.timeframe("240", "KAMA gate timeframe (240 = the book's leg; D = slower/fewer trades)")
 kamaLen  = input.int(14,     "KAMA length", minval = 2)
 usePdh   = input.bool(true,  "PDH sizing (full size only above prior-day high)")
-pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks)", step = 0.25, minval = 0.0, maxval = 1.0)
+pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks; set 0 for the STANDALONE leg)", step = 0.25, minval = 0.0, maxval = 1.0)
+useDsma  = input.bool(false, "Daily-downtrend size cut (STANDALONE ONLY -- harmful inside the 6-leg book)")
+dsmaLen  = input.int(150,    "Daily SMA length for the downtrend test", minval = 20)
+dsmaW    = input.float(0.75, "Size multiplier when daily close < its SMA (target is NOT moved)", step = 0.05, minval = 0.0, maxval = 1.0)
 useRatch = input.bool(false, "TP2->TP1 stop ratchet (only helps under the DAILY KAMA gate; harmful under 240)")
 tp2Rr    = input.float(3.5,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
 ratToRr  = input.float(2.0,  "Ratchet stop-to level TP1 (in R; 0 = breakeven)", step = 0.5, minval = 0.0)
@@ -83,6 +86,14 @@ kamaOk = (not useKama) or kamaUp
 
 // prior-day high (prior COMPLETED day; no repaint / no lookahead)
 pdh = request.security(syminfo.tickerid, "1D", high[1], lookahead = barmerge.lookahead_off)
+
+// daily trend state, from the prior COMPLETED daily bar. When the daily close sits below its SMA a
+// 15m long is counter-trend: the up-legs run about half as far (median excursion 2.69R -> 1.19R).
+// The far target still wins there -- roughly a quarter of them still reach 4.5R and that tail is the
+// whole expectancy -- so this cuts the SIZE, never the target.
+dSmaUp = request.security(syminfo.tickerid, "1D", close[1] > ta.sma(close, dsmaLen)[1],
+                          lookahead = barmerge.lookahead_off)
+dsmaOk = (not useDsma) or na(dSmaUp) or dSmaUp ? 1.0 : dsmaW
 
 // ----- online ZigZag (ATR-threshold reversal) --------------------------------
 var int   zzDir = 1
@@ -163,7 +174,7 @@ if armed and flat and not pend and bar_index > armBar and close > armH1 and kama
     e    = close
     risk = e - armL2
     lim  = e - pbFrac * risk
-    w    = (not usePdh) or (not na(pdh) and e > pdh) ? 1.0 : pdhInW
+    w    = ((not usePdh) or (not na(pdh) and e > pdh) ? 1.0 : pdhInW) * dsmaOk
     if risk > 0 and lim > armL2 and w > 0
         pLim  := lim
         pStop := armL2
