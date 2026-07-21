@@ -31,3 +31,5 @@ config.local.*
 .claude/*
 !.claude/skills/
 !.claude/agents/
+scratchpad/**/*.csv
+scratchpad/*.log

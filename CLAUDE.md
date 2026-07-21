@@ -32,6 +32,14 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
   - gold: `data/vantage_xauusd_{h1,m15,m5,m1}.csv`（h1/m15 は 2007→だが 2017 以前は極端に疎＝実質 2018-。
     **gold h1 は必ず `--start 2018-01-01` を付ける**：2026-07-13 の swings_zigzag 修正で疎データ領域にも
     トレードが出るようになり、付けないと IS/OOS が汚染される）
+    - **🚨 gold・BTC の m15 は 2018-09-14 まで実質1時間足（24本/日）、以降が本物の15分足（92-96本/日）**
+      （2026-07-19 発見・両銘柄とも同一日付＝フィード仕様。gold h1 疎データ罠と同型）。**m15 の日中研究は必ず
+      `2018-10-01` 以降に切る**（密化＋ATR14ウォームアップ余裕）。付けないと初期のイベント/バックテストが粗い足で汚染される。
+    - **gold m1 は 2026-07-19 に橋(mt5-mcp)で 2019-2026 を再取得済み**（`data/vantage_xauusd_m1.csv`＝267万行・1分刻み。
+      旧版は直近7か月200k行だけ＝輸出上限で切れていた、`*.bak_recent200k`）。**ブローカーのm1保持は2019年から**（2018はほぼ無し）。
+      **橋の銘柄名は現Demo口座では `XAUUSD`（`XAUUSD+` は旧口座の記述で今は存在しない）**。橋が `IPC send failed` を返す時は
+      端末未接続＝**8765を握る古いプロセスをkillして `bash ../mt5-mcp/scripts/run_bridge.sh` で立て直す**（PID特定は
+      `powershell.exe -Command "(Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProcess"` → `taskkill.exe /F /PID`）。
   - 週足（2026-07-13 にブリッジで取得）: `vantage_{eurusd,usdjpy}_w1`(1971→)· `{gbpusd,audusd,nzdusd,usdcad}_w1`
     (1993-94→)· `{xauusd,btcusd}_w1`(2017→)。※EURUSD 1999以前・USDJPY 1973以前は合成/固定相場につき使用禁止。
     銘柄名注意: ターミナル上の gold は **`XAUUSD+`**（`XAUUSD` は存在しない）。
@@ -70,6 +78,7 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
 | `research/book.py` | **正典ブック・パイプライン（2026-07-17）**: 採用6レッグを運用仕様（fill_win200/S=RR4.5/ネットコスト/PDHソフト/PDLハード）で構築し、採用審判（トレード解像度DD×トレードRσ逆数・総3%）で裁定。`get_book_legs()`/`book()`/`w_trade()`。アンカー=206本/年・CAGR+61.0%・maxDD7.74%・**CAGR/DD7.88**。番人=`scratchpad/book_tieback.py`（凍結証拠スクリプトと配列一致12検査）。**ブック裁定の実験は今後これを import する（book_integration 等の手書き再構築は禁止）** |
 | `research/gate_passrate.py` | year-by-year ON% of candidate regime gates |
 | `research/instrument_screen.py` | trend-CHARACTER pre-screen of NEW instruments (PRE-SCREEN only; Vantage H1 = arbiter) |
+| `research/instrument_character.py` | 銘柄の素質分解装置（7軸: ドリフト/VR・Hurst/周期/季節/集中度/ボラ/分布 ＋ method-fitタグを13銘柄横並び）。法則2を測定化・自己検証付き。**日次VR単体でmethod-fitを切らない**（全トレンド銘柄がgrind-up＝日次平均回帰なので"fade"誤判定する）。詳細 `docs/findings/s04_instruments.md` |
 
 Most tools report `n, win%, PF, meanR, totR, IS/OOS, maxDD` and `--peryear`. Cost is modeled; raise it to stress-test.
 

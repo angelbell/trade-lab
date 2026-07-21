@@ -1,0 +1,88 @@
+//@version=6
+// FOMC statement 1-minute momentum scalp (gold, XAUUSD, 1-min chart).
+//
+// Logic:
+//   - Trades ONLY the FOMC policy STATEMENT release (14:00 America/New_York), never the
+//     14:30 press conference.
+//   - On the first 1-min bar after the statement (the "confirm bar"): measure the move
+//     from the pre-release price (prior bar close) to the confirm-bar close.
+//   - Size gate: take the trade only if |move| >= sizeMult * ATR(atrLen) measured as of the
+//     bar BEFORE the release (no lookahead).
+//   - Direction: enter WITH the first-minute move (up -> long, down -> short) at the next
+//     bar open (i.e. one minute after the statement).
+//   - Exit: flat after holdMin bars (time exit only; no target/stop by default). Always flat
+//     before the 14:30 press conference.
+//
+// Inputs let you shift the hold, the size gate, and the statement clock. FOMC statement dates
+// are embedded below (America/New_York calendar days); ADD FUTURE MEETINGS to keep it live.
+//
+// Caveats: entry is at the single fastest minute of the session — real slippage can exceed a
+// backtest cost model; set realistic commission+slippage in the strategy Properties and size
+// small until measured. No protective stop is included by design.
+
+strategy("XAUUSD FOMC statement m1 scalp", overlay=true, pyramiding=0,
+         default_qty_type=strategy.fixed, default_qty_value=1,
+         initial_capital=1000, calc_on_every_tick=false)
+
+// ---------------- inputs ----------------
+atrLen   = input.int(14,   "ATR length (1-min bars)", minval=1)
+sizeMult = input.float(4.9,"Size gate: |1st-min move| >= mult * ATR", minval=0.0, step=0.1)
+holdMin  = input.int(5,    "Hold (bars = minutes)", minval=1)
+stmtTz   = input.string("America/New_York", "Statement timezone")
+stmtHour = input.int(14,   "Statement hour (in that tz)", minval=0, maxval=23)
+stmtMin  = input.int(0,    "Statement minute", minval=0, maxval=59)
+
+// only meaningful on a 1-minute chart (the "first minute" and time-exit are bar-counted)
+if barstate.isfirst and (not timeframe.isminutes or timeframe.multiplier != 1)
+    runtime.error("Apply this strategy on a 1-minute XAUUSD chart.")
+
+// ---------------- FOMC statement calendar (America/New_York YYYYMMDD) ----------------
+var int[] fomc = array.from(20190130, 20190320, 20190501, 20190619, 20190731, 20190918, 20191030,
+     20191211, 20200129, 20200429, 20200610, 20200729, 20200916, 20201105, 20201216, 20210127,
+     20210317, 20210428, 20210616, 20210728, 20210922, 20211103, 20211215, 20220126, 20220316,
+     20220504, 20220615, 20220727, 20220921, 20221102, 20221214, 20230201, 20230322, 20230503,
+     20230614, 20230726, 20230920, 20231101, 20231213, 20240131, 20240320, 20240501, 20240612,
+     20240731, 20240918, 20241107, 20241218, 20250129, 20250319, 20250507, 20250618, 20250730,
+     20250917, 20251029, 20251210, 20260128, 20260318, 20260429, 20260617, 20260729, 20260916,
+     20261028, 20261209)
+
+// ---------------- confirm-bar detection ----------------
+ymd        = year(time, stmtTz) * 10000 + month(time, stmtTz) * 100 + dayofmonth(time, stmtTz)
+isFomcDay  = array.includes(fomc, ymd)
+atStmt     = hour(time, stmtTz) == stmtHour and minute(time, stmtTz) == stmtMin
+confirmBar = isFomcDay and atStmt
+
+// ---------------- signal (evaluated at confirm-bar close, no lookahead) ----------------
+p0       = close[1]                     // pre-release price (prior bar close)
+mv       = close - p0                   // first-minute move
+atrPrev  = ta.atr(atrLen)[1]            // ATR as of the bar before the release
+big      = na(atrPrev) ? false : math.abs(mv) >= sizeMult * atrPrev
+dir      = mv > 0 ? 1 : mv < 0 ? -1 : 0
+goLong   = confirmBar and big and dir > 0
+goShort  = confirmBar and big and dir < 0
+
+// ---------------- orders (fill next bar open = one minute after the statement) ----------------
+if goLong
+    strategy.entry("L", strategy.long)
+if goShort
+    strategy.entry("S", strategy.short)
+
+// ---------------- time exit: flat after holdMin bars in position ----------------
+presserGuard = isFomcDay and hour(time, stmtTz) == stmtHour and minute(time, stmtTz) >= 29  // flat before 14:30 presser
+var int held = 0
+if strategy.position_size != 0
+    held += 1
+    if held >= holdMin or presserGuard
+        strategy.close_all(comment="time exit")
+        held := 0
+else
+    held := 0
+
+// ---------------- alerts (fire at the confirm bar so you can act at the next open) ----------------
+alertcondition(goLong,  title="FOMC scalp LONG",  message="FOMC statement: first minute up >= gate -> BUY XAUUSD at next open")
+alertcondition(goShort, title="FOMC scalp SHORT", message="FOMC statement: first minute down >= gate -> SELL XAUUSD at next open")
+
+// ---------------- visuals ----------------
+plotshape(goLong,  title="long",  style=shape.triangleup,   location=location.belowbar, color=color.teal,  size=size.small)
+plotshape(goShort, title="short", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small)
+bgcolor(confirmBar ? color.new(color.orange, 85) : na, title="confirm bar")
