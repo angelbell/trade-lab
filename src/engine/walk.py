@@ -5,11 +5,15 @@ execution rule lives here and only here:
     fill bar itself checked against the stop: same-bar tie → stop wins)
   - split execution (half market + half pullback-limit)
   - tp1 scale-out (bank a fraction at tp1, optional break-even move)
+  - ATR trail (args.trail_atr, default 0 = off; keyword only, no CLI flag):
+    stop = max(stop, low[j-1] - ATR[j-1]*mult)
+    on confirmed bars, target stays live in parallel (first touch wins, stop-wins tie)
   - regime-flip bail (against), timeout at forward-cap close
   - cost and swap accounting
 Returns (trades DataFrame | None, rr_real). Lifted verbatim from breakout_wave.run()."""
 import numpy as np
 import pandas as pd
+import pandas_ta as ta
 
 
 def walk(d, entries, against, args):
@@ -18,6 +22,11 @@ def walk(d, entries, against, args):
     open_x = []                                        # exit bars of currently-open positions
     maxpos = max(1, int(getattr(args, "max_pos", 1)))
     pf = getattr(args, "pullback_frac", 0.0)          # 0 = market entry; >0 = pullback-limit
+    trail_atr = getattr(args, "trail_atr", 0.0) or 0.0   # 0 = off (default; behavior unchanged)
+    trail_arr = None
+    if trail_atr > 0.0:
+        trail_n = int(getattr(args, "trail_n", 14))
+        trail_arr = ta.atr(d["high"], d["low"], d["close"], length=trail_n).values
     for (i, e, stop, tgt, i_origin) in entries:
         open_x = [x for x in open_x if x >= i]        # a signal ON an exit bar stays excluded
                                                       # (matches the historical busy_until <=)
@@ -117,6 +126,21 @@ def walk(d, entries, against, args):
                     realized += rem * ((c[j] - e_px) / risk); R = realized; exit_j = j; break
             if R is None:
                 realized += rem * ((c[exit_j] - e_px) / risk); R = realized
+        elif trail_arr is not None:
+            # ATR trail: ratchet the stop up on confirmed bars only (uses j-1, never j itself
+            # -- no lookahead). Target stays live throughout; same-bar conflict = stop wins
+            # (checked first), matching the tie-break used everywhere else in this walker.
+            cur_stop = stop
+            for j in range(e_bar + 1, min(e_bar + 1 + args.fwd, len(c))):
+                tv = trail_arr[j - 1]
+                if np.isfinite(tv):
+                    cur_stop = max(cur_stop, l[j - 1] - tv * trail_atr)
+                if l[j] <= cur_stop: R = (cur_stop - e_px) / risk; exit_j = j; break
+                if h[j] >= tgt:      R = reward / risk; exit_j = j; break
+                if against is not None and against[j]:        # regime turned down -> bail at close
+                    R = (c[j] - e_px) / risk; exit_j = j; break
+            if R is None:
+                R = (c[exit_j] - e_px) / risk
         else:
             for j in range(e_bar + 1, min(e_bar + 1 + args.fwd, len(c))):
                 if l[j] <= stop: R = -1.0; exit_j = j; break
