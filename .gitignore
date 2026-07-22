@@ -19,6 +19,7 @@ scratchpad/*.out
 scratchpad/*.err
 scratchpad/*.csv
 scratchpad/*.png
+scratchpad/*.json
 
 # --- local-only config (never publish secrets) ---
 *.env
