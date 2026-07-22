@@ -1,0 +1,244 @@
+//@version=6
+// =============================================================================
+//  [BTC 1H] Spike Rider  --  long only
+//  BTCUSD の1時間足。ATR比で大きい陽線の「続き」を取る。
+//  通常は 0.01、シグナルが強いときだけ 0.02 に厚くする。
+//
+//  ロジック:
+//    引き金   : 実体（close-open）が【前バーまでで確定した ATR(14)】の k 倍を超える陽線。
+//               ATR は必ず [1] を使う（当バーを含む ta.atr は自分自身の値幅で閾値が動く）。
+//    位置条件 : 終値が【前日高値より上】。前日高値の下の大陽線はレンジ内の跳ね返り。
+//    時間条件 : 【土日には新規建てしない】。薄い板で出たスパイクは続かない。
+//               ※「週末を持ち越さない」ではない。金曜の入口は良質なので持ち越しは可。
+//    エントリ : 引き金足の確定後、次バーの始値で成行。同時に1ポジションのみ。
+//    サイズ   : 【実体 >= 2.0×ATR かつ 効率比が中央値以上】のときだけ厚いロット。それ以外は薄いロット。
+//               効率比 ER = |終値 - N本前の終値| / Σ|1本ごとの終値変化|（直近N本）。
+//               1に近いほど一方向に走った後、0に近いほど往復していた後。
+//    損切り   : 初期は【引き金足の安値】。以後は毎バー
+//               stop = max(stop, low[1] - ATR(14)[1] * trailMult) で切り上げる。
+//    時間切れ : 建ててから fwdCap 本で未決着なら成行手仕舞い。利確目標は置かない。
+//
+//  no-lookahead: ATR・前日高値・ERとその中央値はすべて確定値([1])を参照。
+//                前日高値は [1] + lookahead_on（非リペイントの慣用句）。
+//                判定は確定足で行い、約定は次バー始値。
+//
+//  🚨 サイズの条件は【積】でなければならない。
+//     ・効率比だけで厚くする → 効果ゼロ
+//     ・実体の大きさだけで厚くする → **むしろ損をする**（大きい拡大足ほど良い、は誤り）
+//     両方そろったときだけ厚くすること。片方だけの版に改変しないこと。
+//  ⚠️ ロング専用。ショートはこの鏡像では成立しない（ゲートを付けても救えない）。
+//  ⚠️ 入れてはいけないもの（いずれも測定して悪化を確認済み）:
+//     レジームゲート（KAMA・SMA150）· 前日安値フィルタ · セッション絞り · 押し目指値 ·
+//     固定RRの利確 · 同時建玉の上限 · 15分足への移植
+//  ⚠️ 1時間足・BTCUSD に適用すること。ETH は同じ形が成立するか未確定。
+// =============================================================================
+strategy("[BTC 1H] Spike Rider",
+     overlay                 = true,
+     initial_capital         = 5000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     pyramiding              = 0,
+     margin_long             = 0,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.02)
+// ⚠️ commission_value は【片道の%】。0.02% × 往復 = 0.04%。
+//    実測（Vantage デモ・バー別スプレッドの中央値）は往復 0.029〜0.038% なので保守側。
+//    暗号資産CFDは手数料ゼロでスプレッドだけなので、往復コスト＝ask−bid。
+// ⚠️ 数量はヘッダでは入力を受け取れないため、下の lotThin / lotThick を strategy.entry に明示的に渡す。
+
+// ---------- inputs ----------
+grpSig  = "シグナル"
+atrLen    = input.int(14,   "ATR 期間",                    minval=2,              group=grpSig)
+kMult     = input.float(1.5,"実体 > ATR × k（引き金）",      minval=0.5, step=0.05, group=grpSig,
+     tooltip="台地は 1.25〜1.75。上げるほど本数が減り、通算も減る。2.0 以上は明確に劣る。")
+usePDH    = input.bool(true,"前日高値より上のみ",                                    group=grpSig)
+pdhBuf    = input.float(0.0,"前日高値からの距離 (ATR単位)", step=0.1,               group=grpSig)
+
+grpSize = "サイズ（2段）"
+kThick    = input.float(2.0,"厚くする実体のしきい (ATR倍)",  minval=0.5, step=0.05, group=grpSize,
+     tooltip="この値以上、かつ効率比が中央値以上のときだけ厚いロットにする。片方だけでは効かない。")
+erLen     = input.int(120,  "効率比の期間 (本)",             minval=10,             group=grpSize,
+     tooltip="1時間足で120本＝5日。60〜120が有効域。240以上は効かなくなる。")
+erMedLen  = input.int(500,  "効率比の中央値をとる期間 (本)", minval=50,             group=grpSize,
+     tooltip="台地は 250〜8000本。500本＝約3週間。")
+lotThin   = input.float(0.01,"薄いロット (枚)",  minval=0.0001, step=0.01,         group=grpSize)
+lotThick  = input.float(0.02,"厚いロット (枚)",  minval=0.0001, step=0.01,         group=grpSize,
+     tooltip="薄いロットの2倍が最良。3倍にすると通算は増えるがドローダウンが27%増えて割に合わない。")
+
+grpTime = "時間フィルタ"
+skipWknd  = input.bool(true, "土日は新規建てしない",                                group=grpTime)
+tzInput   = input.string("Europe/Riga", "曜日判定のタイムゾーン",                    group=grpTime,
+     tooltip="ブローカーのサーバ時計に合わせる。取引所時刻ではない点に注意。")
+
+grpExit = "出口"
+trailMult = input.float(3.0,"トレール幅 (ATR倍)",           minval=0.5, step=0.5,  group=grpExit)
+fwdCap    = input.int(20,   "時間切れ (本)",                minval=1,              group=grpExit,
+     tooltip="1時間足で20本＝壁時計20時間。この機構の固有の時間尺度で、時間足を変えても壁時計で合わせる。")
+
+// ---------- signal ----------
+atrPrev = ta.atr(atrLen)[1]                       // 前バーまでで確定した ATR
+// 前日高値: [1] + lookahead_on が「確定済みの前日」を取る非リペイント慣用句。
+// lookahead_off と [1] を同時に使うと日中は2日前の高値になってしまう。
+pdh     = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+
+// 効率比（当バーを含めず、前バーまでで確定した値を使う）
+pathSum = math.sum(math.abs(ta.change(close)), erLen)
+erRaw   = pathSum > 0 ? math.abs(close - close[erLen]) / pathSum : na
+er      = erRaw[1]
+erMed   = ta.percentile_linear_interpolation(erRaw, erMedLen, 50)[1]
+
+body      = close - open
+isSpike   = not na(atrPrev) and atrPrev > 0 and close > open and body > atrPrev * kMult
+pdhOk     = not usePDH or (not na(pdh) and (close - pdh) / atrPrev > pdhBuf)
+nextDow   = dayofweek(time_close, tzInput)        // 約定は次バーなので次バーの曜日で見る
+wkndOk    = not skipWknd or (nextDow != dayofweek.saturday and nextDow != dayofweek.sunday)
+
+// 🚨 厚くする条件は【積】。片方だけでは効かない／悪化する。
+bodyStrong = body >= atrPrev * kThick
+erStrong   = not na(er) and not na(erMed) and er >= erMed
+isThick    = bodyStrong and erStrong
+
+goLong     = isSpike and pdhOk and wkndOk and strategy.position_size == 0
+useQty     = isThick ? lotThick : lotThin
+
+alertcondition(isSpike and pdhOk and wkndOk, "BTC 1H 拡大足",
+     "{{ticker}} 1H: 拡大足。次バー始値で成行ロング。厚い玉かはチャートの色で確認")
+
+// ---------- 診断（どの条件で落ちているか・いま厚いか薄いかを右上に出す） ----------
+showDbg = input.bool(true, "診断パネルを出す", group = "診断")
+dbgPos  = input.string("bottom_right", "パネルの位置", group = "診断",
+     options = ["top_right", "top_center", "top_left",
+                "bottom_right", "bottom_center", "bottom_left", "middle_right"],
+     tooltip = "右上は TradingView 自身の凡例と重なることがある。既定は右下。")
+
+// カウンタは1行に1つずつ宣言する（カンマで並べる書き方は使わない）
+var int nBar   = 0
+var int nSpike = 0
+var int nPdh   = 0
+var int nWknd  = 0
+var int nGo    = 0
+var int nThick = 0
+
+nBar += 1
+if isSpike
+    nSpike += 1
+    if pdhOk
+        nPdh += 1
+        if wkndOk
+            nWknd += 1
+if goLong
+    nGo += 1
+    if isThick
+        nThick += 1
+
+// テーブルはグローバルで1度だけ作る（if の中で var 宣言しない）。
+// ⚠️ 位置はユーザー関数で返してはいけない（戻り値が series 扱いになり table.new の simple 型と合わない）。
+//    三項演算子を直接書いて simple のまま渡す。
+dbgPosition = dbgPos == "top_right"      ? position.top_right     :
+              dbgPos == "top_center"     ? position.top_center    :
+              dbgPos == "top_left"       ? position.top_left      :
+              dbgPos == "bottom_center"  ? position.bottom_center :
+              dbgPos == "bottom_left"    ? position.bottom_left   :
+              dbgPos == "middle_right"   ? position.middle_right  : position.bottom_right
+
+// force_overlay=true を明示（v6 では描画がメインチャートに載らないことがある）
+var table dbg = table.new(dbgPosition, 2, 9, border_width = 1,
+     bgcolor = color.new(color.black, 20), frame_color = color.gray, frame_width = 1,
+     force_overlay = true)
+
+// 1行に1つの table.cell。na のときは "-" を出す（na を str.tostring すると空欄になる）
+fmt(x) =>
+    na(x) ? "-" : str.tostring(x, "#.####")
+
+// 🔧 切り分け用: 同じ値をデータウィンドウにも出す。
+//    表が出ないとき、ここに値が出ていれば「表の問題」、n/a なら「値が計算されていない」。
+//    ta.percentile_linear_interpolation は期間が長いと na のままになることがある（期間を短くする）。
+plot(er,                 "効率比 いま",     display = display.data_window)
+plot(erMed,              "効率比 中央値",   display = display.data_window)
+plot(isThick ? 1 : 0,    "厚い玉か(1/0)",   display = display.data_window)
+plot(nGo,                "建てた回数",      display = display.data_window)
+plot(nThick,             "うち厚い玉",      display = display.data_window)
+plot(nSpike,             "拡大足",          display = display.data_window)
+
+if showDbg and barstate.islast
+    table.cell(dbg, 0, 0, "総バー数",     text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 0, str.tostring(nBar),   text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 1, "拡大足",       text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 1, str.tostring(nSpike), text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 2, "＋前日高値",   text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 2, str.tostring(nPdh),   text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 3, "＋土日除外",   text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 3, str.tostring(nWknd),  text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 4, "建てた回数",   text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 4, str.tostring(nGo),    text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 5, "うち厚い玉",   text_color = color.silver, text_size = size.small)
+    thickPct = nGo > 0 ? int(math.round(nThick * 100.0 / nGo)) : 0
+    table.cell(dbg, 1, 5, str.tostring(nThick) + " (" + str.tostring(thickPct) + "%)",
+         text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 6, "効率比 いま",  text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 6, fmt(er),        text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 7, "効率比 中央値", text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 7, fmt(erMed),     text_color = color.white, text_size = size.small)
+    table.cell(dbg, 0, 8, "いまの相場",   text_color = color.silver, text_size = size.small)
+    table.cell(dbg, 1, 8, erStrong ? "一方向（厚く張る）" : "往復（薄く張る）",
+         text_color = erStrong ? color.teal : color.orange, text_size = size.small)
+
+// ---------- execution ----------
+var float pendStop = na
+var float stopLvl  = na
+var int   entryBar = na
+
+if goLong
+    pendStop := low                               // 損切りは引き金足の安値
+    strategy.entry("L", strategy.long, qty = useQty,
+         comment = isThick ? "thick" : "thin")
+
+justEntered = strategy.position_size > 0 and strategy.position_size[1] == 0
+if justEntered
+    stopLvl  := pendStop
+    entryBar := bar_index
+
+if strategy.position_size > 0 and not justEntered
+    stopLvl := math.max(stopLvl, low[1] - ta.atr(atrLen)[1] * trailMult)
+
+if strategy.position_size > 0
+    strategy.exit("X", "L", stop = stopLvl)
+    if bar_index - entryBar >= fwdCap
+        strategy.close("L", comment = "time")
+
+if strategy.position_size == 0
+    stopLvl  := na
+    entryBar := na
+
+// ---------- plots ----------
+plot(strategy.position_size > 0 ? stopLvl : na, "トレール", color = color.red,
+     style = plot.style_linebr, linewidth = 2)
+plot(usePDH ? pdh : na, "前日高値", color = color.new(color.gray, 40),
+     style = plot.style_stepline)
+// 厚い玉は濃い三角、薄い玉は淡い三角
+plotshape(goLong and isThick,      "引き金（厚）", shape.triangleup, location.belowbar,
+     color = color.new(color.teal, 0),  size = size.small)
+plotshape(goLong and not isThick,  "引き金（薄）", shape.triangleup, location.belowbar,
+     color = color.new(color.teal, 60), size = size.tiny)
+// 背景＝いま一方向に走った後か（厚く張れる相場か）
+bgcolor(erStrong ? color.new(color.teal, 94) : na, title = "効率比が中央値以上")
+barcolor(isSpike ? (isThick ? color.new(color.teal, 0) : color.new(color.teal, 55)) : na)
+
+// ---------- 診断のラベル版（表が出ないとき用の保険） ----------
+// table は環境によって描画されないことがある。label はほぼ確実に出るので、切り替えられるようにする。
+useLabel = input.bool(false, "診断をラベルで出す（表が出ないとき）", group = "診断")
+var label dbgLab = na
+if useLabel and barstate.islast
+    label.delete(dbgLab)
+    txt = "拡大足 " + str.tostring(nSpike) +
+          "\n＋前日高値 " + str.tostring(nPdh) +
+          "\n＋土日除外 " + str.tostring(nWknd) +
+          "\n建てた回数 " + str.tostring(nGo) +
+          "\nうち厚い玉 " + str.tostring(nThick) +
+          "\n効率比 " + fmt(er) + " / 中央値 " + fmt(erMed) +
+          "\n" + (erStrong ? "一方向（厚く張る）" : "往復（薄く張る）")
+    dbgLab := label.new(bar_index, high, txt, style = label.style_label_left,
+         color = color.new(color.black, 20), textcolor = color.white,
+         size = size.small, force_overlay = true)

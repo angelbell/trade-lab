@@ -1,0 +1,144 @@
+//@version=6
+// =============================================================================
+//  [CRYPTO 1H]  ATR Volatility-Spike Continuation -- long only
+//               BTCUSD / ETHUSD の1時間足。ATR比で異常に大きい陽線の「続き」を取る。
+//
+//  ロジック:
+//    引き金   : 実体（close-open）が【前バーまでで確定した ATR(14)】の k 倍を超える陽線。
+//               ATR は必ず [1] を使う（当バーを含む ta.atr は自分自身の値幅で閾値が動く）。
+//    位置条件 : その足の終値が【前日高値より上】であること（PDH フィルタ）。
+//               前日高値の下で出た大陽線はレンジ内の跳ね返りで、ブレイクではない。
+//    時間条件 : 【土日には新規建てしない】。薄い板で出たスパイクは続かない。
+//               ※「週末を持ち越さない」ではない。金曜の入口は良質なので持ち越しは可。
+//    エントリ : 引き金足の確定後、次バーの始値で成行。同時に1ポジションのみ。
+//    損切り   : 初期は【引き金足の安値】。以後は毎バー
+//               stop = max(stop, low[1] - ATR(14)[1] * trailMult) で切り上げる
+//               （シャンデリア型トレール。利確目標は置かない）。
+//    時間切れ : 建ててから fwdCap 本で未決着なら成行手仕舞い。
+//
+//  no-lookahead: ATR・前日高値・トレール幅はすべて [1]（確定値）を参照し、
+//                前日高値は lookahead_off。判定は確定足で行い約定は次バー始値。
+//
+//  ⚠️ 週末フィルタは「土日も約定できる商品」でのみ意味を持つ。ブローカーによっては
+//     暗号資産CFDが平日限定の期間があり、その区間ではこの条件は常に真になる。
+//  ⚠️ 曜日はチャートのタイムゾーンではなく tzInput（既定=ブローカー時計）で判定する。
+//     取引所時刻とブローカー時刻がずれていると、土日の切れ目が数時間ずれる。
+//  ⚠️ ショートは非対称（この鏡像は成立しない）。ロング専用。
+//  ⚠️ 1時間足に適用すること。
+// =============================================================================
+strategy("[CRYPTO 1H] ATR Volatility-Spike Continuation",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     pyramiding              = 0,
+     margin_long             = 0,
+     commission_type         = strategy.commission.cash_per_contract,
+     commission_value        = 7.5)
+// ⚠️ 数量は下の qtyInput で明示的に渡す。ヘッダの default_qty_value は入力を受け取れないため、
+//    1枚（=1BTC）のままだと初期資金を超えて注文が拒否され、レポートが空になる。
+// ⚠️ commission_value は【1枚あたり片道】。銘柄ごとに プロパティ・タブ で変えること。
+//      BTCUSD = 7.5（往復 $15/BTC）  ·  ETHUSD = 1.0（往復 $2/ETH）
+//    BTC 用の 7.5 のまま ETH に使うと実勢の約7.5倍を課金し、成績が実際より悪く出る。
+
+// ---------- inputs ----------
+grpSig  = "シグナル"
+atrLen    = input.int(14,   "ATR 期間",                 minval=2,             group=grpSig)
+kMult     = input.float(2.0,"実体 > ATR × k",           minval=0.5, step=0.1, group=grpSig,
+     tooltip="引き金の強さ。上げるほど頻度が落ちて1本あたりの質が上がる。")
+usePDH    = input.bool(true,"前日高値より上のみ",                              group=grpSig,
+     tooltip="終値が前日高値を超えている足だけ建てる。レンジ内の跳ね返りを外す。")
+pdhBuf    = input.float(0.0,"前日高値からの距離 (ATR単位)", step=0.1,          group=grpSig,
+     tooltip="(close - 前日高値) / ATR がこの値を超えることを要求する。0 = 前日高値の上。")
+
+grpTime = "時間フィルタ"
+skipWknd  = input.bool(true, "土日は新規建てしない",                           group=grpTime)
+tzInput   = input.string("Europe/Riga", "曜日判定のタイムゾーン",              group=grpTime,
+     tooltip="ブローカーのサーバ時計に合わせる。取引所時刻ではない点に注意。")
+
+grpSize = "サイズ"
+qtyInput  = input.float(0.01,"1トレードの数量 (枚)",  minval=0.0001, step=0.01, group=grpSize,
+     tooltip="固定ロット。BTC は 1枚=1BTC なので初期資金に対して小さく取ること（既定0.01）。" +
+             "ETH など単価の低い銘柄では 0.1〜1 に上げてよい。コストは枚数に比例する。")
+
+grpExit = "出口"
+trailMult = input.float(3.0,"トレール幅 (ATR倍)",       minval=0.5, step=0.5, group=grpExit,
+     tooltip="緩いほど伸ばせる。狭くすると伸びる本を切ってしまう。")
+fwdCap    = input.int(20,   "時間切れ (本)",            minval=1,             group=grpExit,
+     tooltip="建ててからこの本数で未決着なら成行手仕舞い。")
+
+// ---------- signal ----------
+atrPrev = ta.atr(atrLen)[1]                       // 前バーまでで確定した ATR
+// 前日高値: [1] + lookahead_on が「確定済みの前日」を取る非リペイント慣用句。
+// lookahead_off と [1] を同時に使うと日中は2日前の高値になってしまう。
+pdh     = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+
+body      = close - open
+isSpike   = not na(atrPrev) and atrPrev > 0 and close > open and body > atrPrev * kMult
+pdhOk     = not usePDH or (not na(pdh) and (close - pdh) / atrPrev > pdhBuf)
+
+// 約定は次バー始値なので、曜日は「次バーの開始時刻」で見る
+nextDow   = dayofweek(time_close, tzInput)
+wkndOk    = not skipWknd or (nextDow != dayofweek.saturday and nextDow != dayofweek.sunday)
+
+goLong    = isSpike and pdhOk and wkndOk and strategy.position_size == 0
+
+// ---------- 診断（どの条件で落ちているかを右上に出す） ----------
+showDbg = input.bool(true, "診断パネルを出す", group = "診断")
+var int nBar = 0, var int nSpike = 0, var int nPdh = 0, var int nWknd = 0, var int nGo = 0
+nBar += 1
+if isSpike
+    nSpike += 1
+    if pdhOk
+        nPdh += 1
+        if wkndOk
+            nWknd += 1
+if goLong
+    nGo += 1
+
+if showDbg and barstate.islast
+    var table dbg = table.new(position.top_right, 2, 7, border_width = 1)
+    table.cell(dbg, 0, 0, "総バー数"),          table.cell(dbg, 1, 0, str.tostring(nBar))
+    table.cell(dbg, 0, 1, "拡大足"),            table.cell(dbg, 1, 1, str.tostring(nSpike))
+    table.cell(dbg, 0, 2, "＋前日高値"),        table.cell(dbg, 1, 2, str.tostring(nPdh))
+    table.cell(dbg, 0, 3, "＋土日除外"),        table.cell(dbg, 1, 3, str.tostring(nWknd))
+    table.cell(dbg, 0, 4, "建てた回数"),        table.cell(dbg, 1, 4, str.tostring(nGo))
+    table.cell(dbg, 0, 5, "ATR[1]"),            table.cell(dbg, 1, 5, str.tostring(atrPrev, "#.####"))
+    table.cell(dbg, 0, 6, "前日高値"),          table.cell(dbg, 1, 6, str.tostring(pdh, "#.####"))
+
+// ---------- execution ----------
+var float pendStop = na
+var float stopLvl  = na
+var int   entryBar = na
+
+if goLong
+    pendStop := low                               // 損切りは引き金足の安値
+    strategy.entry("L", strategy.long, qty = qtyInput)
+
+justEntered = strategy.position_size > 0 and strategy.position_size[1] == 0
+if justEntered
+    stopLvl  := pendStop
+    entryBar := bar_index
+
+if strategy.position_size > 0 and not justEntered
+    stopLvl := math.max(stopLvl, low[1] - ta.atr(atrLen)[1] * trailMult)
+
+if strategy.position_size > 0
+    strategy.exit("X", "L", stop = stopLvl)
+    if bar_index - entryBar >= fwdCap
+        strategy.close("L", comment = "time")
+
+if strategy.position_size == 0
+    stopLvl  := na
+    entryBar := na
+
+// ---------- plots ----------
+plot(strategy.position_size > 0 ? stopLvl : na, "トレール", color = color.red,
+     style = plot.style_linebr, linewidth = 2)
+plot(usePDH ? pdh : na, "前日高値", color = color.new(color.gray, 40),
+     style = plot.style_stepline)
+plotshape(goLong, "引き金", shape.triangleup, location.belowbar,
+     color = color.new(color.teal, 0), size = size.tiny)
+barcolor(isSpike ? color.new(color.teal, 30) : na)

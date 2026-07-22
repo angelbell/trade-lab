@@ -1,0 +1,195 @@
+//@version=6
+// =============================================================================
+//  [ALT 1H]  ATR Volatility-Spike Continuation + 先導銘柄の同時確認 -- long only
+//            アルトの大陽線は、BTC が【ほぼ同じ瞬間に】同じ形を出しているときだけ取る。
+//
+//  🚨 貼ってよい銘柄は【ETHUSD のみ】（TRXUSD は候補だがトレード数が足りない）。
+//     SOL / ADA / DOT / XRP / LTC / BCH / BNB は、実測スプレッドが 1トレードの損切り幅の
+//     20〜360% に達するため、機構が生きていてもコストで死ぬ。貼らないこと。
+//     判定の基準は「往復スプレッド ÷ 損切り幅 が 10% 未満」。損切り幅は引き金足の値幅なので
+//     おおむね価格の 2〜3%、∴ **往復スプレッドが価格の 0.2% 未満**の銘柄だけが対象。
+//     気配値表示でスプレッドを確認してから貼ること（銘柄間で 0.04% 〜 10% と桁が違う）。
+//
+//  ロジック:
+//    引き金   : 実体（close-open）が【前バーまでで確定した ATR(14)】の k 倍を超える陽線。
+//               ATR は必ず [1] を使う（当バーを含む ta.atr は自分自身の値幅で閾値が動く）。
+//    同時確認 : 【先導銘柄（既定 BTCUSD）が、同じ足か1本前に、同じ引き金を出していること】。
+//               この条件が本スクリプトの主役。単独スパイクは見送る。
+//    位置条件 : その足の終値が【前日高値より上】であること（PDH フィルタ）。
+//    時間条件 : 【土日には新規建てしない】。薄い板で出たスパイクは続かない。
+//               ※「週末を持ち越さない」ではない。金曜の入口は良質なので持ち越しは可。
+//    エントリ : 引き金足の確定後、次バーの始値で成行。同時に1ポジションのみ。
+//    損切り   : 初期は【引き金足の安値】。以後は毎バー
+//               stop = max(stop, low[1] - ATR(14)[1] * trailMult) で切り上げる
+//               （シャンデリア型トレール。利確目標は置かない）。
+//    時間切れ : 建ててから fwdCap 本で未決着なら成行手仕舞い。
+//
+//  no-lookahead: ATR・トレール幅は [1]（確定値）。前日高値は [1] + lookahead_on
+//                （これが「確定済みの前日」を取る非リペイント慣用句）。同時確認は同じ時間足を
+//                lookahead_off で読むので、両者の足は同時に確定する＝先読みにならない。
+//                判定は確定足で行い、約定は次バー始値。
+//
+//  🚨 同時建玉の上限は Pine では強制できない。
+//     本スクリプトは1銘柄=1チャートなので、6銘柄に貼ると最大6本が同時に開きうる。
+//     先導銘柄が動いた瞬間に全銘柄が一斉に鳴る設計なので、これは例外ではなく通常の挙動。
+//     **同時に持つのは1〜2本まで**という上限は、発注する人間の側で守ること
+//     （早く鳴ったものから取り、埋まっていたら見送る）。守らないとドローダウンが数倍になる。
+//
+//  ⚠️ ロング専用。この同時確認はショートでは成立しない（先導銘柄が一緒に下げる状態は
+//     日常的な全面安で、上げの同時性とは中身が違う）。鏡像を作らないこと。
+//  ⚠️ 暗号資産の一家の中でだけ成立する条件。貴金属・株価指数・FX に移してはならない
+//     （それらの一家には、片方の参加が他方の動きの真贋を決める構造が無い）。
+//  ⚠️ 先導銘柄には**取引しているブローカーの BTC の銘柄名**を入れること。
+//     取引所が違うと足の切れ目がずれ、同時確認が成立しなくなる。
+//  ⚠️ 1時間足に適用すること。
+// =============================================================================
+strategy("[ALT 1H] ATR Spike + 先導銘柄の同時確認",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     pyramiding              = 0,
+     margin_long             = 0,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.1)
+// ⚠️ commission_value は【片道の%】。0.1 = 往復 0.2% ＝ アルトのスプレッドとしては保守的な想定。
+//    実勢が分かっているならプロパティ・タブで実測値に置き換える。
+// ⚠️ 数量は下の qtyInput で明示的に渡す。ヘッダの default_qty_value は入力を受け取れないため、
+//    1枚のままだと単価の高い銘柄で初期資金を超えて注文が拒否され、レポートが空になる。
+
+// ---------- inputs ----------
+grpLead = "先導銘柄の同時確認"
+useLead   = input.bool(true, "先導銘柄の同時確認を要求する",                     group=grpLead,
+     tooltip="外すと単独スパイクも取る。本スクリプトの主役の条件なので、外すと別物になる。")
+leadSym   = input.symbol("BTCUSD", "先導銘柄",                                  group=grpLead,
+     tooltip="取引しているブローカーの BTC を指定する。取引所が違うと足の切れ目がずれる。")
+leadK     = input.float(2.0,"先導銘柄の 実体 > ATR × k",  minval=0.5, step=0.1, group=grpLead,
+     tooltip="先導銘柄側の引き金の強さ。通常はこちらの k と同じにする。")
+leadBack  = input.int(1,    "何本前まで認めるか",          minval=0, maxval=3,  group=grpLead,
+     tooltip="0=同じ足のみ。1=同じ足か1本前（既定）。広げるほど条件は緩むが質は落ちる。")
+
+grpSig  = "シグナル"
+atrLen    = input.int(14,   "ATR 期間",                 minval=2,             group=grpSig)
+kMult     = input.float(2.0,"実体 > ATR × k",           minval=0.5, step=0.1, group=grpSig,
+     tooltip="引き金の強さ。上げるほど頻度が落ちて1本あたりの質が上がる。")
+usePDH    = input.bool(true,"前日高値より上のみ",                              group=grpSig,
+     tooltip="終値が前日高値を超えている足だけ建てる。レンジ内の跳ね返りを外す。")
+pdhBuf    = input.float(0.0,"前日高値からの距離 (ATR単位)", step=0.1,          group=grpSig,
+     tooltip="(close - 前日高値) / ATR がこの値を超えることを要求する。0 = 前日高値の上。")
+
+grpTime = "時間フィルタ"
+skipWknd  = input.bool(true, "土日は新規建てしない",                           group=grpTime)
+tzInput   = input.string("Europe/Riga", "曜日判定のタイムゾーン",              group=grpTime,
+     tooltip="ブローカーのサーバ時計に合わせる。取引所時刻ではない点に注意。")
+
+grpSize = "サイズ"
+qtyInput  = input.float(1.0,"1トレードの数量 (枚)",   minval=0.0001, step=0.1, group=grpSize,
+     tooltip="固定ロット。銘柄ごとに単価が大きく違うので、1トレードの損失（損切りまでの幅×枚数）が" +
+             "口座の許容内に収まる枚数に置き換えること。")
+
+grpExit = "出口"
+trailMult = input.float(3.0,"トレール幅 (ATR倍)",       minval=0.5, step=0.5, group=grpExit,
+     tooltip="緩いほど伸ばせる。狭くすると伸びる本を切ってしまう。")
+fwdCap    = input.int(20,   "時間切れ (本)",            minval=1,             group=grpExit,
+     tooltip="建ててからこの本数で未決着なら成行手仕舞い。")
+
+// ---------- signal ----------
+atrPrev = ta.atr(atrLen)[1]                       // 前バーまでで確定した ATR
+// 前日高値: [1] + lookahead_on が「確定済みの前日」を取る非リペイント慣用句。
+// lookahead_off と [1] を同時に使うと日中は2日前の高値になってしまう。
+pdh     = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+
+// 先導銘柄の引き金を、その銘柄の文脈で計算して持ってくる。同じ時間足なので両者の足は
+// 同時に確定する＝この足の終値の時点で先導銘柄の値も確定している（先読みではない）。
+leadRaw = request.security(leadSym, timeframe.period,
+     (close - open) > ta.atr(atrLen)[1] * leadK and close > open,
+     lookahead = barmerge.lookahead_off)
+leadNow = nz(leadRaw, false)
+leadHit = leadNow
+if leadBack >= 1
+    leadHit := leadHit or nz(leadRaw[1], false)
+if leadBack >= 2
+    leadHit := leadHit or nz(leadRaw[2], false)
+if leadBack >= 3
+    leadHit := leadHit or nz(leadRaw[3], false)
+
+body      = close - open
+isSpike   = not na(atrPrev) and atrPrev > 0 and close > open and body > atrPrev * kMult
+leadOk    = not useLead or leadHit
+pdhOk     = not usePDH or (not na(pdh) and (close - pdh) / atrPrev > pdhBuf)
+
+// 約定は次バー始値なので、曜日は「次バーの開始時刻」で見る
+nextDow   = dayofweek(time_close, tzInput)
+wkndOk    = not skipWknd or (nextDow != dayofweek.saturday and nextDow != dayofweek.sunday)
+
+goLong    = isSpike and leadOk and pdhOk and wkndOk and strategy.position_size == 0
+
+alertcondition(isSpike and leadOk and pdhOk and wkndOk,
+     "ALT 拡大足＋先導銘柄の同時確認",
+     "{{ticker}} 1H: 拡大足＋先導銘柄も同時。次バー始値で成行ロング（同時建玉は1〜2本まで）")
+
+// ---------- 診断（どの条件で落ちているかを右上に出す） ----------
+showDbg = input.bool(true, "診断パネルを出す", group = "診断")
+var int nBar = 0, var int nSpike = 0, var int nLead = 0
+var int nPdh = 0, var int nWknd = 0, var int nGo = 0
+nBar += 1
+if isSpike
+    nSpike += 1
+    if leadOk
+        nLead += 1
+        if pdhOk
+            nPdh += 1
+            if wkndOk
+                nWknd += 1
+if goLong
+    nGo += 1
+
+if showDbg and barstate.islast
+    var table dbg = table.new(position.top_right, 2, 8, border_width = 1)
+    table.cell(dbg, 0, 0, "総バー数"),          table.cell(dbg, 1, 0, str.tostring(nBar))
+    table.cell(dbg, 0, 1, "拡大足"),            table.cell(dbg, 1, 1, str.tostring(nSpike))
+    table.cell(dbg, 0, 2, "＋先導銘柄も同時"),  table.cell(dbg, 1, 2, str.tostring(nLead))
+    table.cell(dbg, 0, 3, "＋前日高値"),        table.cell(dbg, 1, 3, str.tostring(nPdh))
+    table.cell(dbg, 0, 4, "＋土日除外"),        table.cell(dbg, 1, 4, str.tostring(nWknd))
+    table.cell(dbg, 0, 5, "建てた回数"),        table.cell(dbg, 1, 5, str.tostring(nGo))
+    table.cell(dbg, 0, 6, "ATR[1]"),            table.cell(dbg, 1, 6, str.tostring(atrPrev, "#.####"))
+    table.cell(dbg, 0, 7, "前日高値"),          table.cell(dbg, 1, 7, str.tostring(pdh, "#.####"))
+
+// ---------- execution ----------
+var float pendStop = na
+var float stopLvl  = na
+var int   entryBar = na
+
+if goLong
+    pendStop := low                               // 損切りは引き金足の安値
+    strategy.entry("L", strategy.long, qty = qtyInput)
+
+justEntered = strategy.position_size > 0 and strategy.position_size[1] == 0
+if justEntered
+    stopLvl  := pendStop
+    entryBar := bar_index
+
+if strategy.position_size > 0 and not justEntered
+    stopLvl := math.max(stopLvl, low[1] - ta.atr(atrLen)[1] * trailMult)
+
+if strategy.position_size > 0
+    strategy.exit("X", "L", stop = stopLvl)
+    if bar_index - entryBar >= fwdCap
+        strategy.close("L", comment = "time")
+
+if strategy.position_size == 0
+    stopLvl  := na
+    entryBar := na
+
+// ---------- plots ----------
+plot(strategy.position_size > 0 ? stopLvl : na, "トレール", color = color.red,
+     style = plot.style_linebr, linewidth = 2)
+plot(usePDH ? pdh : na, "前日高値", color = color.new(color.gray, 40),
+     style = plot.style_stepline)
+plotshape(goLong, "引き金", shape.triangleup, location.belowbar,
+     color = color.new(color.teal, 0), size = size.tiny)
+// 単独スパイク（先導銘柄が静かで見送った足）を薄い色で残す＝見送りの理由が目で追える
+barcolor(isSpike ? (leadHit ? color.new(color.teal, 30) : color.new(color.gray, 70)) : na)
+bgcolor(useLead and leadHit ? color.new(color.teal, 92) : na, title = "先導銘柄が拡大足")

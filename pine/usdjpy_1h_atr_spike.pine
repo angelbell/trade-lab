@@ -1,0 +1,111 @@
+//@version=6
+// =============================================================================
+//  [USDJPY 1H]  ATR Volatility-Spike Continuation -- long only + weekly trend gate
+//               ドル円1時間足。ATR比で異常に大きい陽線の「続き」を、上昇局面に限って取る。
+//
+//  暗号資産版（crypto_1h_atr_spike）と同じ引き金だが、3点が意図的に異なる（すべて測定結果）:
+//    1. 週足トレンド・ゲートを【入れる】。暗号資産では全ゲートが有害だったが、ドル円では効く。
+//       機構: 暗号資産は上昇ドリフトがあるのでトレンド文脈が拡大足と冗長。ドル円は管理相場で
+//             トレンドが稀なので、ゲートが「欠けている文脈」を実際に補う。
+//    2. 損切りは【ATR基準】。暗号資産では「引き金足の反対端」が正しいが、ドル円では逆。
+//    3. 週末フィルタは【無い】。FX は元から土日が閉まっている。
+//
+//  ロジック:
+//    引き金   : 実体（close-open）が【前バーまでで確定した ATR(14)】の k 倍を超える陽線。
+//    地合い   : 【週足終値が30週SMAより上】（前週の確定値）。下向き局面では建てない。
+//    位置条件 : 終値が【前日高値より上】。前日高値の下の大陽線はレンジ内の跳ね返り。
+//    エントリ : 引き金足の確定後、次バーの始値で成行。同時に1ポジションのみ。
+//    損切り   : 【入口 − stopMult × ATR(14)[1]】。以後は毎バー
+//               stop = max(stop, low[1] - ATR(14)[1] * trailMult) で切り上げる（利確目標なし）。
+//    時間切れ : 建ててから fwdCap 本で未決着なら成行手仕舞い。
+//
+//  no-lookahead: ATR・前日高値・週足ゲートはすべて確定値([1])を参照。判定は確定足、約定は次バー始値。
+//
+//  ⚠️ ロング専用。鏡像のショートは成立しない（ゲート付きで PF<1、ゲート無しでも帰無を超えない）。
+//  ⚠️ 低頻度レッグ。地合いゲートが閉じている年は数本しか出ない。
+//  ⚠️ 1時間足に適用すること。
+// =============================================================================
+strategy("[USDJPY 1H] ATR Volatility-Spike + weekly gate",
+     overlay                 = true,
+     initial_capital         = 100000,
+     default_qty_type        = strategy.fixed,
+     default_qty_value       = 1,
+     calc_on_every_tick      = false,
+     process_orders_on_close = false,
+     pyramiding              = 0,
+     margin_long             = 0,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.003)
+// ⚠️ commission_value は【片道の%】。0.003% × 往復 = 0.006% ≒ 0.9pip（150円換算）。
+//    数量はヘッダでは入力を受け取れないので、下の qtyInput で strategy.entry に明示的に渡す。
+
+// ---------- inputs ----------
+grpSig  = "シグナル"
+atrLen    = input.int(14,   "ATR 期間",                minval=2,             group=grpSig)
+kMult     = input.float(2.0,"実体 > ATR × k",          minval=0.5, step=0.05, group=grpSig,
+     tooltip="台地は 2.0〜2.25。上げるほどPFは上がるが本数が減り、円建ての総額は落ちる。")
+usePDH    = input.bool(true,"前日高値より上のみ",                             group=grpSig)
+pdhBuf    = input.float(0.0,"前日高値からの距離 (ATR単位)", step=0.1,         group=grpSig)
+
+grpGate = "地合いゲート"
+useGate   = input.bool(true,"週足30MAより上のみ",                            group=grpGate,
+     tooltip="ドル円ではこれが効く（無ゲート PF1.42 → ゲート付き 1.79）。暗号資産版には入れない。")
+gateLen   = input.int(30,   "週足MAの期間",            minval=5,             group=grpGate)
+
+grpSize = "サイズ"
+qtyInput  = input.float(10000,"1トレードの数量 (通貨単位)", minval=1, step=1000, group=grpSize,
+     tooltip="1ロット=100,000通貨。10,000=0.1ロット。1トレードの損失が資金の3%に収まる量にすること。")
+
+grpExit = "出口"
+stopMult  = input.float(2.0,"初期損切り (ATR倍)",      minval=0.5, step=0.5, group=grpExit,
+     tooltip="台地は 2.0〜3.0。暗号資産版と違い、ドル円ではATR基準が正しい。")
+trailMult = input.float(3.0,"トレール幅 (ATR倍)",      minval=0.5, step=0.5, group=grpExit,
+     tooltip="台地は 2.5〜4.0。ここは成績にほとんど効かない。")
+fwdCap    = input.int(20,   "時間切れ (本)",           minval=1,             group=grpExit,
+     tooltip="20本を超えるとドローダウンが倍以上に膨らむ。動かさないこと。")
+
+// ---------- signal ----------
+atrPrev = ta.atr(atrLen)[1]
+pdh     = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+wUp     = request.security(syminfo.tickerid, "W", (close > ta.sma(close, gateLen))[1],
+                           lookahead = barmerge.lookahead_on)
+
+isSpike = not na(atrPrev) and atrPrev > 0 and close > open and (close - open) > atrPrev * kMult
+pdhOk   = not usePDH  or (not na(pdh) and (close - pdh) / atrPrev > pdhBuf)
+gateOk  = not useGate or (not na(wUp) and wUp)
+goLong  = isSpike and pdhOk and gateOk and strategy.position_size == 0
+
+// ---------- execution ----------
+var float pendStop = na
+var float stopLvl  = na
+var int   entryBar = na
+
+if goLong
+    pendStop := close - stopMult * atrPrev          // 損切りは ATR 基準（暗号資産版と異なる）
+    strategy.entry("L", strategy.long, qty = qtyInput)
+
+justEntered = strategy.position_size > 0 and strategy.position_size[1] == 0
+if justEntered
+    stopLvl  := pendStop
+    entryBar := bar_index
+
+if strategy.position_size > 0 and not justEntered
+    stopLvl := math.max(stopLvl, low[1] - ta.atr(atrLen)[1] * trailMult)
+
+if strategy.position_size > 0
+    strategy.exit("X", "L", stop = stopLvl)
+    if bar_index - entryBar >= fwdCap
+        strategy.close("L", comment = "time")
+
+if strategy.position_size == 0
+    stopLvl  := na
+    entryBar := na
+
+// ---------- plots ----------
+plot(strategy.position_size > 0 ? stopLvl : na, "トレール", color = color.red,
+     style = plot.style_linebr, linewidth = 2)
+plot(usePDH ? pdh : na, "前日高値", color = color.new(color.gray, 40),
+     style = plot.style_stepline)
+bgcolor(useGate and not gateOk ? color.new(color.gray, 92) : na, title = "ゲート閉")
+plotshape(goLong, "引き金", shape.triangleup, location.belowbar,
+     color = color.new(color.teal, 0), size = size.tiny)
