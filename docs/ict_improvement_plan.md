@@ -2,7 +2,7 @@
 
 2026-07-16 時点。忠実化ライン（優先1〜5＋WHEN 検証＋素材診断＋変換率解剖）の総括と、
 そこから逆算した改善案。数字の原本は `docs/findings/m_ict.md`（ICT 各項）と
-`scratchpad/ict_*.py` の出力ログ。**adopt / kill / close の判断はユーザーが行う。**
+`experiments/ict_*.py` の出力ログ。**adopt / kill / close の判断はユーザーが行う。**
 
 ## 0. 現在地
 

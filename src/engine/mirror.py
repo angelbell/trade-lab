@@ -3,8 +3,8 @@
 lower-high and a down-target all fall out of the long code automatically.
 Note ratio-based features (ext-cap %, swap on notional) do NOT mirror cleanly.
 
-Lifted from scratchpad/short_mirror_15m.py — import invert from HERE: that module
-executes its whole experiment at import time (old scratchpad style, kept as history)."""
+Lifted from experiments/short_mirror_15m.py — import invert from HERE: that module
+executes its whole experiment at import time (old experiments style, kept as history)."""
 import pandas as pd
 
 

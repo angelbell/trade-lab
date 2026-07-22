@@ -189,7 +189,7 @@ def run(d: pd.DataFrame, args) -> pd.DataFrame:
     (gates / detect / plan / walk / stats — one execution walker for the whole
     breakout family); this wrapper keeps the historical call signature that
     ~200 research scripts import. Bit-identity with the pre-split monolith is
-    guarded by scratchpad/engine_tieback.py and scratchpad/engine_golden.py —
+    guarded by invariants/engine_tieback.py and invariants/engine_golden.py —
     re-run both before trusting ANY engine edit."""
     from src.engine.compat import run_compat   # lazy: avoids import cycle
     return run_compat(d, args)

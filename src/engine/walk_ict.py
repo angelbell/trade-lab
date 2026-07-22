@@ -1,6 +1,6 @@
 """The ICT execution walker — the engine's third execution model (ask-based limit
 fills on bid data, spread-aware, per-pair costs, killzone windows, NY wall-clock).
-Moved verbatim from scratchpad/ict_exec.py (2026-07-17); that module is now a
+Moved verbatim from experiments/ict_exec.py (2026-07-17); that module is now a
 forwarding shim so its ~25 existing importers keep working. Its semantics
 genuinely differ from walk.walk (breakout) and walk.walk_ema — do not blend them.
 

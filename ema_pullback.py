@@ -60,8 +60,8 @@ def efficiency_ratio(c: np.ndarray, n: int) -> np.ndarray:
 def run(d: pd.DataFrame, side: str, args, thr: float):
     """Composable engine entry point — logic lives in src/engine/ (detect_ema /
     gates.ema_* / walk.walk_ema / stats.summarize_ema). This wrapper keeps the
-    historical call signature. Bit-identity guarded by scratchpad/engine_tieback.py
-    and scratchpad/engine_golden.py — re-run both before trusting any engine edit."""
+    historical call signature. Bit-identity guarded by invariants/engine_tieback.py
+    and invariants/engine_golden.py — re-run both before trusting any engine edit."""
     from src.engine.compat import run_ema_compat   # lazy: avoids import cycle
     return run_ema_compat(d, side, args, thr)
 

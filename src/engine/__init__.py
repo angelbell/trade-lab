@@ -3,7 +3,7 @@
     bars → gates (regime arrays) → setups (detect) → orders (plan) → trades (walk) → summarize
 
 Contract: `run_compat(d, args)` is BIT-IDENTICAL to `breakout_wave.run(d, args)`
-(same returned trade table, same printed lines). Guarded by scratchpad/engine_tieback.py —
+(same returned trade table, same printed lines). Guarded by invariants/engine_tieback.py —
 any edit to this package must re-pass that gauntlet before its numbers are trusted.
 
 Swing/KAMA primitives stay in breakout_wave.py (201 scripts import them from there);

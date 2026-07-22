@@ -79,14 +79,14 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
 |---|---|
 | `breakout_wave.py` | Elliott Pattern-A/B breakout（gold_bo/btc_bo の本体；--pullback-frac, --retest 等） |
 | `ema_pullback.py` | EMA pullback-continuation（btc_pull の本体；--gate-tf 系でサイクルゲート） |
-| `src/engine/` | 分解エンジン（gates/detect/plan/**walk**/stats/**size**/**arbiter**/**walk_ict**/mirror、2026-07-17）。**執行ウォーカーは walk.py（breakout系＋walk_ema）と walk_ict.py（ICT系: ASK基準指値・キルゾーン・NY壁時計）、サイズ写像は size.py、同DD裁定は arbiter.py だけ**＝各層の修正は1箇所。旧 run() は薄い委譲ラッパー、旧 `scratchpad/arb_common.py`・`ict_exec.py` は転送シム（呼び出し側は無変更）。**engine を編集したら番人3本の全PASSが必須**: `scratchpad/engine_tieback.py`（41構成）・`engine_golden.py check-run`・`size_tieback.py`（ICT系はアブレーション出力のバイト一致で照合済み）。新規スクリプトの自前ウォーカー/サイズ写像/裁定器の実装は禁止＝ここから import |
+| `src/engine/` | 分解エンジン（gates/detect/plan/**walk**/stats/**size**/**arbiter**/**walk_ict**/mirror、2026-07-17）。**執行ウォーカーは walk.py（breakout系＋walk_ema）と walk_ict.py（ICT系: ASK基準指値・キルゾーン・NY壁時計）、サイズ写像は size.py、同DD裁定は arbiter.py だけ**＝各層の修正は1箇所。旧 run() は薄い委譲ラッパー、旧 `experiments/arb_common.py`・`ict_exec.py` は転送シム（呼び出し側は無変更）。**engine を編集したら番人3本の全PASSが必須**: `invariants/engine_tieback.py`（41構成）・`engine_golden.py check-run`・`size_tieback.py`（ICT系はアブレーション出力のバイト一致で照合済み）。新規スクリプトの自前ウォーカー/サイズ写像/裁定器の実装は禁止＝ここから import |
 | `mfe_mae.py` | generic entry-edge SCREEN (MFE/MAE ratio)：<1.0 dead, >1.2 worth deeper test |
 | `research/edge_harness.py` | **標準evalハーネス — 新signalは必ずこれに通す**（PF/N/リスク/TFラダー/ベータnull/先読み禁止をコードで強制） |
 | `research/scalp_lab.py` | anti-overfit intraday harness (orb/squeeze/bounce; IS/VAL/sealed TEST) |
 | `research/regime_discriminator.py` | 任意signalの効く場面/効かない場面を IS→OOS＋random-drop null＋年別ON% で見分ける一次スクリーン |
 | `research/overfit_audit.py` | **MEASURE overfit risk** (Deflated Sharpe + PBO/CSCV + bootstrap-CI/null) — 採用前の標準ゲート |
 | `research/portfolio.py` / `portfolio_alloc.py` | combine legs into one equity curve + annual-R correlations / allocation |
-| `research/book.py` | **構成の正典パイプライン（2026-07-17）**: 採用6レッグを運用仕様（fill_win200/S=RR4.5/ネットコスト/PDHソフト/PDLハード）で構築し、採用審判（トレード解像度DD×トレードRσ逆数・総3%）で裁定。`get_book_legs()`/`book()`/`w_trade()`。アンカー=206本/年・CAGR+61.0%・maxDD7.74%・**CAGR/DD7.88**。番人=`scratchpad/book_tieback.py`（凍結証拠スクリプトと配列一致12検査）。**構成の裁定を伴う実験は今後これを import する（book_integration 等の手書き再構築は禁止）** |
+| `research/book.py` | **構成の正典パイプライン（2026-07-17）**: 採用6レッグを運用仕様（fill_win200/S=RR4.5/ネットコスト/PDHソフト/PDLハード）で構築し、採用審判（トレード解像度DD×トレードRσ逆数・総3%）で裁定。`get_book_legs()`/`book()`/`w_trade()`。アンカー=206本/年・CAGR+61.0%・maxDD7.74%・**CAGR/DD7.88**。番人=`invariants/book_tieback.py`（凍結証拠スクリプトと配列一致12検査）。**構成の裁定を伴う実験は今後これを import する（book_integration 等の手書き再構築は禁止）** |
 | `research/gate_passrate.py` | year-by-year ON% of candidate regime gates |
 | `research/instrument_screen.py` | trend-CHARACTER pre-screen of NEW instruments (PRE-SCREEN only; Vantage H1 = arbiter) |
 | `research/instrument_character.py` | 銘柄の素質分解装置（7軸: ドリフト/VR・Hurst/周期/季節/集中度/ボラ/分布 ＋ method-fitタグを13銘柄横並び）。法則2を測定化・自己検証付き。**日次VR単体でmethod-fitを切らない**（全トレンド銘柄がgrind-up＝日次平均回帰なので"fade"誤判定する）。詳細 `docs/findings/x_instruments.md` |

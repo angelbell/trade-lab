@@ -2,8 +2,8 @@
 
 BASE = the 15m-breakout family template every adopted 15m leg starts from
 (gold15m / btc15m_L / btc15m_S override rr / gates / pullback_frac on top).
-Copied verbatim from scratchpad/radar_gate_race.py (the frozen original);
-scratchpad/book_tieback.py asserts the two stay equal.
+Copied verbatim from experiments/radar_gate_race.py (the frozen original);
+invariants/book_tieback.py asserts the two stay equal.
 """
 
 BASE = dict(pattern="B", sl_mode="line", sl_buf=0.25, swing="zigzag", zz_k=2.0,

@@ -8,9 +8,9 @@ All levels use confirmed-bar semantics (shift(1) + ffill) = no lookahead:
 prior-day high/low, the last CONFIRMED 4H swing high, yesterday's completed
 daily SMA, and ICT labels computed strictly before the fill bar.
 
-Lifted verbatim from the measured evidence scripts (kept frozen in scratchpad/):
+Lifted verbatim from the measured evidence scripts (kept frozen in experiments/):
 book_integration.py (PDH soft), stack_size_btc15mL.py (ladder / daily regime),
-ict_size_transplant.py (compute_labels). Guarded by scratchpad/size_tieback.py —
+ict_size_transplant.py (compute_labels). Guarded by invariants/size_tieback.py —
 array-identical against those originals on the canonical btc15m_L trade set.
 """
 import numpy as np

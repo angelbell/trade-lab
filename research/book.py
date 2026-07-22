@@ -11,10 +11,10 @@ weights = inverse of each leg's trade-R sigma, scaled to 3% total risk.
 Anchor (adopted 2026-07-13, after the fill-bar bug fix): the 6-leg book prints
 n/yr ≈ 206 / CAGR ≈ +61.0% / maxDD ≈ 7.74% / CAGR/DD ≈ 7.88.
 
-Lifted verbatim from scratchpad/book_deployed_spec.py + book_spec_fix.py
+Lifted verbatim from experiments/book_deployed_spec.py + book_spec_fix.py
 (kept frozen as evidence); size overlays go through src/engine/size (proven
-array-identical to the originals by scratchpad/size_tieback.py). Guarded by
-scratchpad/book_tieback.py — legs and verdict must match the frozen scripts.
+array-identical to the originals by invariants/size_tieback.py). Guarded by
+invariants/book_tieback.py — legs and verdict must match the frozen scripts.
 
 Run: .venv/bin/python research/book.py
 """

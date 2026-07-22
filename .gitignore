@@ -14,12 +14,12 @@ scratch/
 
 # --- scratchpad: keep the .py evidence scripts (cited by docs/verified_findings.md),
 #     ignore run outputs / images / cached data (regenerable by re-running) ---
-scratchpad/*.txt
-scratchpad/*.out
-scratchpad/*.err
-scratchpad/*.csv
-scratchpad/*.png
-scratchpad/*.json
+experiments/*.txt
+experiments/*.out
+experiments/*.err
+experiments/*.csv
+experiments/*.png
+experiments/*.json
 
 # --- local-only config (never publish secrets) ---
 *.env
@@ -32,5 +32,5 @@ config.local.*
 .claude/*
 !.claude/skills/
 !.claude/agents/
-scratchpad/**/*.csv
-scratchpad/*.log
+experiments/**/*.csv
+experiments/*.log

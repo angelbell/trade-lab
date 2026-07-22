@@ -1,7 +1,7 @@
 """Reporting: the print block of breakout_wave.run(), separated from computation.
 metrics() computes the numbers (dict); summarize() prints them and returns the
 trade table unchanged. Print output is byte-identical to the pre-split run()
-(guarded by scratchpad/engine_golden.py)."""
+(guarded by invariants/engine_golden.py)."""
 import numpy as np
 
 

@@ -93,7 +93,7 @@
 - ❌🔑 バンドウォーク離脱→反発 & VWAP±σバンド端＝フェード側は3銘柄・全形態で負、浮いたのは「BTC 1h継続」のみ (2026-07-10)
 - 🟢🔑 BTC 1h継続5セルの重複チェック＝独立性は合格（低相関関門を通った初の入口族）、ただしRR1測定器のままではコストで4/5沈む (2026-07-12)
 - 🟡 同・出口変換（ショート戦略形への変換, 事前登録基準に未達の near-miss＝裁定変数はBTC実スプレッド） (2026-07-12)
-- ❌🔑 SAR fade-to-mean（上のFADE転用：EMA200乖離＋SAR反転→mean回帰、乖離幅＝日足ATR14基準、出口exit_mode=mean、`scratchpad/sar_fade.py`/`sar_fade2.py`, 2026-07-05, 因果PASS）＝棄却 (2026-07-05)
+- ❌🔑 SAR fade-to-mean（上のFADE転用：EMA200乖離＋SAR反転→mean回帰、乖離幅＝日足ATR14基準、出口exit_mode=mean、`experiments/sar_fade.py`/`sar_fade2.py`, 2026-07-05, 因果PASS）＝棄却 (2026-07-05)
 
 ## M5. ICT 系（キルゾーン・OTE・流動性狩り・MSS・FVG）  →本文: findings/m_ict.md
 - ❌🔑🚨 ICT NYキルゾーン（日足バイアス→ロンドン安値狩り→OTE指値 RR2）6銘柄×両サイド全滅。教訓3つ＝深い指値はコスト自爆／薄い時間の妙味は偽約定／日足バイアスは逆向き。(2026-07-14, m_ict#ict-killzone)
@@ -210,7 +210,7 @@
 - 🟢🔑 新ツール `research/regime_discriminator.py`（"効く場面/効かない場面"の汎用ディスクリミネータ、2026-07-05）＝正例/負例で二重検証済み (2026-07-05)
 - ❌🔑 ATR_regime（>1.2＝ボラ拡張）ゲート＝B→A規律で棄却、KAMA-rising優位を再確認 (2026-07-05)
 - ❌🟡 GMMA(Guppy 12EMA)の「散らばり」レジームゲート＝KAMA代替として不成立（合格線未達）・goldのみ光る片翼リード残し (2026-07-11)
-- 🟢🔑 初動採点器 `scratchpad/trend_birth_meter.py`＝「早さ×正確さ」交換曲線の測定器（新検出器は関数1個で増設可）＋初回計測: KAMA転換より早い検出器なし・機械は初動を92-96%既に捕っている (2026-07-11)
+- 🟢🔑 初動採点器 `experiments/trend_birth_meter.py`＝「早さ×正確さ」交換曲線の測定器（新検出器は関数1個で増設可）＋初回計測: KAMA転換より早い検出器なし・機械は初動を92-96%既に捕っている (2026-07-11)
 - ❌🔑 15m KAMA発火の真偽識別スクリーン＝価格・時刻系7特徴で識別不能（両銘柄一致の合格ゼロ）＋発火自体の前方エッジ≈0 (2026-07-11)
 
 ## X4. サイジング／配分  →本文: findings/x_sizing.md
@@ -263,7 +263,7 @@
 - 🚨🔑🔬 【バグ・修正済み】`breakout_wave.py` の押し目指値パスが約定足の損切り判定を飛ばしていた。押し目が深いほど汚染が増え（0.25→3.1%/0.70→23%）、「深いほど良い」の偽発見の元。(2026-07-13, x_conventions#fillbar-stop-bug)
 - 🚨🔑 【仕様ズレ・修正済み】ブックの数字を出す機械が Pine と2箇所相違（押し目指値の期限 500 vs 200・btc15m_S が RR4.0 を継承）。数字を公表する前に発注側の設定で引き直す。(2026-07-13, x_conventions#deployed-spec-mismatch)
 - 反発/逆張りの順序固定: バウンス率→選別可否→巡行幅→やっとRR
-- no-lookahead は scratchpad でも厳守
+- no-lookahead は experiments でも厳守
 - overfit_audit が標準ゲート
 - 確率/分布は毎回 中央値・標準偏差（歪なら分位）
 - 🔬 【規約】閾値をパーセンタイルで決めるな＝「上位N%を捨てる」は未来の分布を知っている。使える形は事前に決めた丸い絶対値か、前半で凍結し後半に当てるか。(2026-07-13, m_breakout#wide-stop-filter-retracted)
@@ -328,7 +328,7 @@
 - ❌🔑🔥 「BTC同時」はアルトのショートには効かない（帰無の下側%ile37.9/35.4・符号一致3/9 vs ロング8/9）。構造法則11の新実例＝向きで効くものが反転する。(2026-07-22, m_breakout#atr-spike-leader-short)
 - 🔑 機構の解釈: BTCが一緒に下げるのは日常的な全面安（すぐ戻る）が、BTCが一緒に上げるのは本物のリスクオンの資金流入。同じ同時性でも中身が違う。(2026-07-22, m_breakout#atr-spike-leader-short)
 - 📁 BTC同時アルトの Pine: `pine/altcoin_1h_atr_spike.pine`（**ETHUSD のみ**・1H・ロング専用）。他5銘柄は実測スプレッドで脱落 → #atr-spike-real-crypto-spread。(2026-07-22, m_breakout#atr-spike-btc-leader)
-- 🔧 Pine の照合手順: `scratchpad/atr_spike_alt_funnel.py` が診断パネルと同じ絞り込みの段を出す。段ごとの通過率は 拡大足→先導同時 40-45% → 前日高値 62-63% → 土日除外 84-89% で2フィード一致。(2026-07-22, m_breakout#atr-spike-btc-leader)
+- 🔧 Pine の照合手順: `experiments/atr_spike_alt_funnel.py` が診断パネルと同じ絞り込みの段を出す。段ごとの通過率は 拡大足→先導同時 40-45% → 前日高値 62-63% → 土日除外 84-89% で2フィード一致。(2026-07-22, m_breakout#atr-spike-btc-leader)
 - 🟢🔑🔥 先導フィルタはブロック・ブートストラップも合格。ブロックを長くするほど勝率が上がり12か月で91.3%(Binance)/100%(Vantage)＝真の改善の署名。(2026-07-22, m_breakout#atr-spike-leader-blockboot)
 - 🚨🔑🔥 【撤回】「同時建玉の上限はリスク調整後も良くする(11.17→13.41)」は誤り。上限1本は1/6/12か月で50%割れ(26/31/31%)、上限2本も12か月で62%/51%に戻る＝経路当てはめ。(2026-07-22, m_breakout#atr-spike-leader-blockboot)
 - 🔑 上限は「良くする操作」でなく「中立な操作」。totRとmaxDDを比例して削るので比は不変。かける理由は執行可能性と絶対DD(16.7R→10.0R)＝リスクを選べるのであって得はしない。(2026-07-22, m_breakout#atr-spike-leader-blockboot)
@@ -344,7 +344,7 @@
 - 🚨🔑🔥 教訓: 未実測の変数を「保守側のつもり」で置くな。保守側かどうかは測るまで分からない。橋のtickで読めるものは撃つ前に読む。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
 - 🟢🔑 訂正は両方向に効く: BTC(0.038%)とETH(0.132%)は仮定より安く、比が BTC 3.35→7.99・ETH 8.94→10.23 に改善。銘柄が減って totR/DD はむしろ上がった。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
 - 🟢🔑 生き残る組み合わせ＝BTC＋ETH（TRXはN=26で薄い）: N=336・年75本・勝率51.5%・1本+0.368R・DD8.2R・比15.02。アルト横展開は元々独立性を足していなかった。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
-- 📁 Vantageデモの暗号資産スプレッド採取器 `scratchpad/sample_crypto_spread.py`（読み取りのみ・CSV追記）。実測は閑散時間帯の1点なので判定は下限、拡大足の瞬間は更に開く。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
+- 📁 Vantageデモの暗号資産スプレッド採取器 `experiments/sample_crypto_spread.py`（読み取りのみ・CSV追記）。実測は閑散時間帯の1点なので判定は下限、拡大足の瞬間は更に開く。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
 - 🔑 Vantageデモの暗号資産スプレッドは9分22回で max/min 1.00-1.09＝ほぼ固定。変動幅でなく銘柄ごとの固定マークアップ＝「閑散時間だから広い」の但し書きは弱い。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
 - 🔧 橋の /rates は MT5 が持つ per-bar spread 列を落として OHLCV だけ返す（`bridge/mt5_client.py` の copy_rates）。1行足せば拡大足の瞬間の実スプレッドを遡って測れる。(2026-07-22, m_breakout#atr-spike-real-crypto-spread)
 - 🟢🔑🔥 拡大足レッグの最終形＝BTC 1時間＋ETH 1時間(BTC確認)。実スプレッド課金で他7銘柄は全滅。合成 年72本・勝率51.4%・1本+0.343R・DD9.8R・比11.26・5年とも黒字。(2026-07-22, m_breakout#atr-spike-barspread-final)
@@ -353,7 +353,7 @@
 - 🚨🔑 単位でPFが変わる: BTCはR基準1.89だが価格%基準(=固定ロットの実額)では1.47。Rはストップ幅で割るので固定比率サイズを暗黙に含む。0.01ロット判断には価格%基準を使う。(2026-07-22, m_breakout#atr-spike-barspread-final)
 - 🔑 0.01ロットの規模感: BTC名目96,326円・1トレード最大損失の中央値1,485円・年+13,000円(年46本)・maxDD約12,450円。10万円口座なら0.01ロットで既にリスク1.5%・年13%・DD12%。(2026-07-22, m_breakout#atr-spike-barspread-final)
 - 🚨🔑 ETHは0.01ロットではほぼ効かない(名目2,903円・1本+34円)。銘柄ごとに「同じ枚数」でなく「同じ名目」で揃えないと検証の比率と実額が一致しない。(2026-07-22, m_breakout#atr-spike-barspread-final)
-- 🔧 橋の /rates に per-bar spread を追加（`bridge/mt5_client.py` copy_rates に1行・後方互換）。`scratchpad/bar_spreads.json` に10銘柄h1×45,000本＋BTC/ETH m15×200,000本を保存済み。(2026-07-22, m_breakout#atr-spike-barspread-final)
+- 🔧 橋の /rates に per-bar spread を追加（`bridge/mt5_client.py` copy_rates に1行・後方互換）。`experiments/bar_spreads.json` に10銘柄h1×45,000本＋BTC/ETH m15×200,000本を保存済み。(2026-07-22, m_breakout#atr-spike-barspread-final)
 - 🚨🔑🔥 【撤回】「BTC h1ショートは0.5戻り売り指値でPF1.27・maxDD56→19%」は再現しない。2022-のクリーン期間＋実スプレッドでPF1.08・比0.50。原因は平日限定だった2018-2021の混入。(2026-07-22, m_breakout#atr-spike-short-final)
 - ❌🔑 拡大足にショートの条件は無い。ロング専用で確定。最良の変種(成行 比2.38)でも同じ物差しのロング(比8.32)の3割以下、しかも直近2年がマイナス。コストのせいではない(1Rの3%)。(2026-07-22, m_breakout#atr-spike-short-final)
 - 🔬🔑 「ショートは戻り売り指値が必須」もクリーン期間では消える（成行1.07・0.3指値1.10・0.5指値1.08が横並び）＝法則11の「逆方向は執行で救える」はこの機構では不成立。(2026-07-22, m_breakout#atr-spike-short-final)
@@ -394,4 +394,4 @@
 - 🟢🔑🔥 段の高さは0.02で十分（ブロック12か月85.7% vs 0.03の84.1%）でDDは27%小さい（18,967 vs 25,923円）。通常0.01・強いシグナルで0.02が確定形。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
 - 🚨🔑 「強い」の定義は【実体>2.0ATR かつ ER高】の積でなければならない。ERだけは45%（無）、実体だけは26%でブロックを長くするほど悪化＝有害。「大きい拡大足ほど良い」は誤り。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
 - 📁 確定形のPine: `pine/btc_1h_spike_rider.pine`（BTC 1H ロング専用・k1.5・実体2.0ATRかつ効率比が中央値以上のとき0.02/他0.01・ATR×3トレール・fwd20・診断パネルつき）。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
-- 🔧 効率比の中央値は【移動窓】でよい（Pine で拡張窓は重すぎる）。窓250-8000本が台地で、むしろ拡張窓より良い（Binance +7%→+19%）。既定は500本。照合は `scratchpad/atr_spike_er_funnel.py`。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
+- 🔧 効率比の中央値は【移動窓】でよい（Pine で拡張窓は重すぎる）。窓250-8000本が台地で、むしろ拡張窓より良い（Binance +7%→+19%）。既定は500本。照合は `experiments/atr_spike_er_funnel.py`。(2026-07-22, m_breakout#atr-spike-body-x-er-size)

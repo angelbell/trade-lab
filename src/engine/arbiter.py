@@ -1,5 +1,5 @@
 """Paired-bootstrap arbiter — the VERDICT stage of the engine pipeline.
-Moved verbatim from scratchpad/arb_common.py (2026-07-17); that module is now a
+Moved verbatim from experiments/arb_common.py (2026-07-17); that module is now a
 forwarding shim so its ~16 existing importers keep working.
 
 Why this exists: the equal-maxDD comparison de-levers each arm until its bootstrapped-median maxDD

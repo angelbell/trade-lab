@@ -1375,7 +1375,7 @@ falsifier:
 - tools: scratchpad多数(touch_reaction/candle_react/fastangle/skipfirst/drop2nd/be_profit/milk/gated_rr/reconcile/vol_split/trend_split/separability/sep_wave/char_20ema/tradeable_beta)。Pine: gold_5m_exhaustion_bounce(=R建てフラットの実験、非採用、コミットせず)。
 
 ### 判定(2026-06-30): 200MA反発(touch-and-hold) — 非採用(機械レグ) / だが裁量チェックリストは完全裏取り
-ユーザー提案「200EMA反発確認→エントリー」を機械化、ユーザーの逐次指示(タッチして上で確定型, V字アタック除外, 重要水平線合流, RR固定せずフラクタル構造出口, EMA/SMA両方, アタック回数)を全部反映して叩いた。tools: research/ma200_bounce.py(全銘柄×TF素screen), ma200_bounce_quality.py(V除外+水平線+ランダム間引きnull), ma200_bounce_fractal.py(構造出口 target=戻り高値 / trail=フラクタル安値割れ), ma200_bounce_attack.py(EMA/SMA×アタック回数+CAGR/DD null), scratchpad/level_firsttouch.py(水平線オンリー)。
+ユーザー提案「200EMA反発確認→エントリー」を機械化、ユーザーの逐次指示(タッチして上で確定型, V字アタック除外, 重要水平線合流, RR固定せずフラクタル構造出口, EMA/SMA両方, アタック回数)を全部反映して叩いた。tools: research/ma200_bounce.py(全銘柄×TF素screen), ma200_bounce_quality.py(V除外+水平線+ランダム間引きnull), ma200_bounce_fractal.py(構造出口 target=戻り高値 / trail=フラクタル安値割れ), ma200_bounce_attack.py(EMA/SMA×アタック回数+CAGR/DD null), experiments/level_firsttouch.py(水平線オンリー)。
 - **素のベース=ほぼ全面死亡**: 全銘柄(gold/btc/usdjpy/eurusd)×TF(1h-1d)でmeanRマイナス, win31-40%≒RR2分岐33%。1h-4hは全死(上昇200MA周辺は壁紙=年中発火するノイズ)。USDJPY/EURUSDは壊滅(順張り=管理通貨で両側死, 既知)。生気はgold 8h/btc 1dのロングのみ(高TFスイング, 後ろ偏り)。**1h/4hはスキャルでない(ユーザー訂正)=これはスイング法**。
 - **出口は銘柄で逆**(構造出口, 固定RR撤廃): **gold=戻り高値ターゲット一択**(8h target meanR+0.40〜0.52, trailは-0.02に殺す=ゴールドは戻ると反落), **BTC=トレール寄り**(1d trail+0.33/win53%)=既知の「gold=ターゲット型, BTC=ランナー型」一致。構造R中央値3-5R(=戻り高値は損切の3-5倍先, 「伸ばす」はgeometry内蔵)。
 - **V字回避が一番効く(ユーザーの本命直感が正)**: 生きてるセルで一貫してISを持ち上げ(後ろ偏り是正)かつランダム間引きを抜ける(gold 4h target 93%ile IS-0.03→+0.13, gold 8h 87-88%ile, gold 1d 82%ile IS+0.14→+0.29)。**水平線フィルタはムラ**(死んだセルで98-100%ile跳ね, 生きてるgold 8hでは57%ile)。
