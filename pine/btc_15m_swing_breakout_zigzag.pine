@@ -16,6 +16,17 @@
 //    玉サイズ : 前日高値(PDH)との位置で二段。ブレイク終値が PDH より上（新値圏＝頭上に
 //               前日の売り物が無い）ならフル玉、前日レンジ内なら insideW 倍（既定0.5、
 //               0にするとレンジ内は見送り）。レンジ内ブレイクは頭上供給に食われやすい。
+//    E1階段  : useStair=on（単独運用向け）で上の二段を三段に置換 -- ブレイク終値が
+//               「前日高値 かつ 直近確定4Hスイング高値」の両方の上=フル、片方だけ=0.5、
+//               どちらの上でもない=0.25。日足下降カット(useDsma, x0.75)と併用が本体。
+//               4Hスイング高値は同じATR-ZigZagを4H足に適用（確定足のみ・リペイント無し）。
+//               ※ICTラベルによる弱玉カットは近似検出器のため未移植（意図的）。
+//               ブック(6レッグ)では階段/日足は使わない -- PDHソフト0.5のまま（単独運用専用）。
+//    固定ロット: useFixed=on で risk% をやめ、強度の段で離散ロットを直接置く（小口座の手張り用）。
+//               段=ブレイク終値が{前日高値, 4Hスイング高値}の何本の上か。既定 neither/one/both=
+//               0.01/0.02/0.02（＝運用の2段: 濃縮が倍になる neither|one 境界で切る）。both=0.03
+//               にすると3段（強い層に厚く張るが濃縮1.3倍への過剰張りで頑健性とDDは劣る）。
+//               ※固定ロットでは日足下降カットは適用しない（0.01の床より下に削れないため）。
 //    損切/利確: 損切=L2（価格固定）、利確=e+RR*risk（価格固定、既定RR4.5）。指値を下げるぶん
 //               実効RRは膨らむ（reward↑/risk↓）。目標を近づけると勝ちを切ることになり劣化する
 //               （RR>=4.5 の帯が最良で、RR4.0 は取り逃しが出る）。サイズ: 1トレード=資金 riskPct%
@@ -54,9 +65,14 @@ kamaTf   = input.timeframe("240", "KAMA gate timeframe (240 = the book's leg; D 
 kamaLen  = input.int(14,     "KAMA length", minval = 2)
 usePdh   = input.bool(true,  "PDH sizing (full size only above prior-day high)")
 pdhInW   = input.float(0.5,  "Inside-range size multiplier (0 = skip inside-range breaks; set 0 for the STANDALONE leg)", step = 0.25, minval = 0.0, maxval = 1.0)
+useStair = input.bool(false, "E1 size STAIRCASE (STANDALONE): full only above BOTH prior-day high AND last 4H swing high; one=0.5, neither=0.25 -- REPLACES the PDH-soft weight above. Pair with the daily-downtrend cut below.")
 useDsma  = input.bool(false, "Daily-downtrend size cut (STANDALONE ONLY -- harmful inside the 6-leg book)")
 dsmaLen  = input.int(150,    "Daily SMA length for the downtrend test", minval = 20)
 dsmaW    = input.float(0.75, "Size multiplier when daily close < its SMA (target is NOT moved)", step = 0.05, minval = 0.0, maxval = 1.0)
+useFixed = input.bool(false, "FIXED-LOT mode (STANDALONE hand-trading): ignore risk% and place a discrete lot by strength tier. Tier = how many of {prior-day high, last 4H swing high} the break closes above.", group = "Fixed-lot tiers")
+lotNei   = input.float(0.01, "  lot: NEITHER above (weakest)",           step = 0.01, minval = 0.01, group = "Fixed-lot tiers")
+lotOne   = input.float(0.02, "  lot: ONE above",                          step = 0.01, minval = 0.01, group = "Fixed-lot tiers")
+lotBoth  = input.float(0.02, "  lot: BOTH above (2-tier op = 0.02; set 0.03 for the aggressive 3-tier)", step = 0.01, minval = 0.01, group = "Fixed-lot tiers")
 useRatch = input.bool(false, "TP2->TP1 stop ratchet (only helps under the DAILY KAMA gate; harmful under 240)")
 tp2Rr    = input.float(3.5,  "Ratchet trigger TP2 (in R of lim-risk)", step = 0.5, minval = 0.5)
 ratToRr  = input.float(2.0,  "Ratchet stop-to level TP1 (in R; 0 = breakeven)", step = 0.5, minval = 0.0)
@@ -94,6 +110,36 @@ pdh = request.security(syminfo.tickerid, "1D", high[1], lookahead = barmerge.loo
 dSmaUp = request.security(syminfo.tickerid, "1D", close[1] > ta.sma(close, dsmaLen)[1],
                           lookahead = barmerge.lookahead_off)
 dsmaOk = (not useDsma) or na(dSmaUp) or dSmaUp ? 1.0 : dsmaW
+
+// ----- E1 component-1: last CONFIRMED 4H swing high --------------------------
+// The staircase (useStair) needs the most recent confirmed swing high on the 4H timeframe. We run
+// the SAME ATR-ZigZag as the 15m wave below, but stepped once per COMPLETED 4H bar. Fetch the just-
+// closed 4H bar (high[1]/low[1] on the 4H series + lookahead_off = no repaint) and advance the state
+// only when a new 4H period opens (= the prior 4H bar has just closed). hh4h holds the last swing high.
+h4 = request.security(syminfo.tickerid, "240", high[1],           lookahead = barmerge.lookahead_off)
+l4 = request.security(syminfo.tickerid, "240", low[1],            lookahead = barmerge.lookahead_off)
+a4 = request.security(syminfo.tickerid, "240", ta.atr(atrLen)[1], lookahead = barmerge.lookahead_off)
+is4New = ta.change(time("240")) != 0
+var int   z4Dir = 1
+var float z4Ext = na
+var float hh4h  = na
+if is4New and not na(a4) and a4 > 0
+    if na(z4Ext)
+        z4Ext := h4
+    thr4 = zzK * a4
+    if z4Dir >= 0
+        if h4 > z4Ext
+            z4Ext := h4
+        else if z4Ext - l4 >= thr4
+            hh4h  := z4Ext
+            z4Dir := -1
+            z4Ext := l4
+    if z4Dir <= 0
+        if l4 < z4Ext
+            z4Ext := l4
+        else if h4 - z4Ext >= thr4
+            z4Dir := 1
+            z4Ext := h4
 
 // ----- online ZigZag (ATR-threshold reversal) --------------------------------
 var int   zzDir = 1
@@ -164,6 +210,7 @@ var float pStop   = na
 var float pTgt    = na
 var float pU      = na       // realized risk = lim - stop (sizing + ratchet unit)
 var float pW      = na       // size weight: 1.0 above PDH (new-high air), pdhInW inside range
+var float pLotF   = na       // fixed-lot tier size (used only if useFixed)
 var int   pBar    = na
 var float curStop = na
 var float curTgt  = na
@@ -174,21 +221,31 @@ if armed and flat and not pend and bar_index > armBar and close > armH1 and kama
     e    = close
     risk = e - armL2
     lim  = e - pbFrac * risk
-    w    = ((not usePdh) or (not na(pdh) and e > pdh) ? 1.0 : pdhInW) * dsmaOk
+    // size weight: E1 staircase (PDH x 4H-swing-high, 1.0/0.5/0.25) if useStair, else the PDH-soft
+    // weight. Either is then scaled by the daily-downtrend cut. (Book = PDH-soft; standalone = staircase.)
+    aboveP = not na(pdh) and e > pdh
+    aboveH = not na(hh4h) and e > hh4h
+    stair  = (aboveP and aboveH) ? 1.0 : (aboveP or aboveH) ? 0.5 : 0.25
+    w    = (useStair ? stair : ((not usePdh) or aboveP ? 1.0 : pdhInW)) * dsmaOk
+    // fixed-lot tier (used only if useFixed): both/one/neither above {PDH, 4H swing high}.
+    // Daily-downtrend cut is NOT applied here (cannot go below the 0.01 floor) -- risk% mode only.
+    tierLot = (aboveP and aboveH) ? lotBoth : (aboveP or aboveH) ? lotOne : lotNei
     if risk > 0 and lim > armL2 and w > 0
         pLim  := lim
         pStop := armL2
         pTgt  := e + rr * risk
         pU    := lim - armL2
         pW    := w
+        pLotF := tierLot
         pBar  := bar_index
         pend  := true
     armed := false
 
 // while waiting: keep the limit live; cancel if price ran to target first (missed) or expired
 if pend and flat
-    // BTC 最小ロット 0.01 → 小数第2位に切り上げ（リスク許容5%内なので取りこぼしを避け最小0.01で建てる）
-    qty = math.ceil((strategy.equity * riskPct * pW) / pU * 100) / 100
+    // FIXED-LOT: place the strength-tier lot directly. Else: risk% sizing (1トレード=資金riskPct%,
+    // BTC最小0.01ロット刻みに切り上げ／リスク許容5%内なので取りこぼしを避け最小0.01で建てる)。
+    qty = useFixed ? pLotF : math.ceil((strategy.equity * riskPct * pW) / pU * 100) / 100
     if qty >= 0.01
         strategy.entry("L", strategy.long, qty = qty, limit = pLim)
     if high >= pTgt
@@ -224,6 +281,8 @@ plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
 plot(pend ? pLim : na, "Pullback limit", color = color.new(color.aqua, 0),
      style = plot.style_linebr, linewidth = 1)
 plot(usePdh ? pdh : na, "Prior-day high (PDH)", color = color.new(color.gray, 30),
+     style = plot.style_steplinebr, linewidth = 1)
+plot(useStair ? hh4h : na, "Last 4H swing high (E1 staircase)", color = color.new(color.purple, 20),
      style = plot.style_steplinebr, linewidth = 1)
 brkNow = armed and flat and not pend and bar_index > armBar and close > armH1 and kamaOk
 plotshape(brkNow and close > pdh, title = "Break above PDH (full size)",

@@ -23,6 +23,14 @@
 //  no-lookahead: 日足は close[1]/sma[1]（前日確定）+ lookahead_off。extension も同じ前日値。
 //  運用上の注意 : 1%リスク上限・実DDはバックテストの1.5-2倍想定。スワップ未計上、終値計算→
 //                 次足約定で1本ぶんの誤差。15M チャートに適用すること。
+//
+//  スケールアウト・モード（既定OFF＝勝率・連敗を均す「楽さ」用。soUse で ON）:
+//    半分(soFrac)を近い RR(soNearRr)で利確し、残り半分を遠い RR(soFarRr)まで伸ばす。近い
+//    利確が埋まったら残り半分の損切りを建値へ移す（soBE）。押し目指値の runaway キャンセルは
+//    遠い(soFarRr)目標基準なので、約定する母集団は fixed-RR モードと同じ。既定プリセット =
+//    near2.5 / far5.0 / 50% / BE-on。これはリターンを増やす出口ではなく、勝率を上げ最長連敗を
+//    縮めるための「楽さ」トレードオフ（詳細な数値は docs 参照）。⚠️ 半分を利確するには最低
+//    0.02 ロット必要（0.01 は分割できない）。心理的に持てないなら出口より先に玉サイズを下げる。
 // =============================================================================
 strategy("[GOLD 15M] Swing Breakout (ZigZag)",
      overlay                 = true,
@@ -39,7 +47,12 @@ zzK      = input.float(2.0, "ZigZag reversal (ATR)",  step = 0.25, minval = 0.5)
 atrLen   = input.int(14,    "ATR length",             minval = 1)
 trendLen = input.int(80,    "Trend EMA (gate)",       minval = 1)
 useGate  = input.bool(true, "Require wave-1 high above trend EMA")
-rr       = input.float(4.0, "Reward : Risk",          step = 0.5, minval = 0.5)
+rr       = input.float(4.0, "Reward : Risk (fixed-RR mode)",          step = 0.5, minval = 0.5)
+soUse    = input.bool(false, "Scale-out mode (bank a fraction near, run the rest far)", group = "Scale-out (楽さレバー)")
+soNearRr = input.float(2.5, "  near TP (RR) -- bank soFrac here", step = 0.5, minval = 0.5, group = "Scale-out (楽さレバー)")
+soFarRr  = input.float(5.0, "  far TP (RR) -- remainder runs to here", step = 0.5, minval = 0.5, group = "Scale-out (楽さレバー)")
+soFrac   = input.float(50,  "  fraction banked at near TP (%)", step = 5, minval = 1, maxval = 99, group = "Scale-out (楽さレバー)")
+soBE     = input.bool(true, "  move stop to break-even after near TP fills", group = "Scale-out (楽さレバー)")
 boWindow = input.int(20,    "Breakout window (bars after wave-2 low)", minval = 1)
 riskPct  = input.float(1.0, "Risk per trade (% equity)", step = 0.25, minval = 0.0) / 100.0
 pbFrac   = input.float(0.25, "Pullback-limit depth (entry = e - frac*risk; 0 = market entry)", step = 0.05, minval = 0.0, maxval = 0.95)
@@ -167,9 +180,14 @@ var float pLim    = na
 var float pStop   = na
 var float pTgt    = na
 var float pU      = na       // realized risk = lim - stop（サイズはこちらで測る）
+var float pTgt1   = na       // scale-out: near TP (bank soFrac here)
+var float pE      = na       // scale-out: break-even level = ブレイク終値 e
 var int   pBar    = na
 var float curStop = na
 var float curTgt  = na
+var float curTp1  = na
+var float curE    = na
+var bool  tp1Done = false
 
 if armed and flat and not pend and bar_index > armBar and close > armH1
     if dailyOk and kamaOk and extOk and sessOk
@@ -177,9 +195,12 @@ if armed and flat and not pend and bar_index > armBar and close > armH1
         risk = e - armL2
         lim  = e - pbFrac * risk
         if risk > 0 and lim > armL2
+            farRr = soUse ? soFarRr : rr
             pLim  := lim
             pStop := armL2
-            pTgt  := e + rr * risk
+            pTgt  := e + farRr * risk       // runaway ref + final target (両モード共通の母集団)
+            pTgt1 := e + soNearRr * risk     // scale-out の近い利確
+            pE    := e                       // scale-out の建値
             pU    := lim - armL2
             pBar  := bar_index
             pend  := true
@@ -201,9 +222,22 @@ if strategy.position_size > 0 and pend
     pend    := false
     curStop := pStop
     curTgt  := pTgt
+    curTp1  := pTgt1
+    curE    := pE
+    tp1Done := false
+
+// scale-out: 近い利確に到達したら記録（建値ストップは次足から有効＝1本ぶんの離散化）
+if strategy.position_size > 0 and soUse and not tp1Done and high >= curTp1
+    tp1Done := true
 
 if strategy.position_size > 0
-    strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
+    if soUse
+        // 近い利確が埋まるまでは半分ぶんの利確指値＋全量ストップ、埋まった後は残り全量を遠い利確へ
+        if not tp1Done
+            strategy.exit("TP1", from_entry = "L", qty_percent = soFrac, stop = curStop, limit = curTp1)
+        strategy.exit("TP2", from_entry = "L", stop = (soBE and tp1Done) ? curE : curStop, limit = curTgt)
+    else
+        strategy.exit("L-exit", "L", stop = curStop, limit = curTgt)
 
 // ----- plots -----------------------------------------------------------------
 plot(useDaily ? dSmaNow : na, "Daily SMA (regime)", color = color.new(color.purple, 0), linewidth = 1)
@@ -218,6 +252,10 @@ plot(armed ? armL2 : na, "Armed L2 (stop)", color = color.new(color.red, 0),
      style = plot.style_linebr, linewidth = 1)
 plot(pend ? pLim : na, "Pullback limit (working order)", color = color.new(color.aqua, 0),
      style = plot.style_linebr, linewidth = 1)
+plot(soUse and strategy.position_size > 0 ? curTp1 : na, "Scale-out near TP", color = color.new(color.fuchsia, 0),
+     style = plot.style_linebr, linewidth = 1)
+plot(soUse and strategy.position_size > 0 and soBE and tp1Done ? curE : na, "Break-even stop (after near TP)",
+     color = color.new(color.gray, 0), style = plot.style_linebr, linewidth = 1)
 brkNow = armed and flat and not pend and bar_index > armBar and close > armH1 and dailyOk and kamaOk and extOk and sessOk
 plotshape(brkNow, title = "Breakout (place the pullback limit)",
      style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)

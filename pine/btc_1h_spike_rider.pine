@@ -225,20 +225,3 @@ plotshape(goLong and not isThick,  "引き金（薄）", shape.triangleup, locat
 // 背景＝いま一方向に走った後か（厚く張れる相場か）
 bgcolor(erStrong ? color.new(color.teal, 94) : na, title = "効率比が中央値以上")
 barcolor(isSpike ? (isThick ? color.new(color.teal, 0) : color.new(color.teal, 55)) : na)
-
-// ---------- 診断のラベル版（表が出ないとき用の保険） ----------
-// table は環境によって描画されないことがある。label はほぼ確実に出るので、切り替えられるようにする。
-useLabel = input.bool(false, "診断をラベルで出す（表が出ないとき）", group = "診断")
-var label dbgLab = na
-if useLabel and barstate.islast
-    label.delete(dbgLab)
-    txt = "拡大足 " + str.tostring(nSpike) +
-          "\n＋前日高値 " + str.tostring(nPdh) +
-          "\n＋土日除外 " + str.tostring(nWknd) +
-          "\n建てた回数 " + str.tostring(nGo) +
-          "\nうち厚い玉 " + str.tostring(nThick) +
-          "\n効率比 " + fmt(er) + " / 中央値 " + fmt(erMed) +
-          "\n" + (erStrong ? "一方向（厚く張る）" : "往復（薄く張る）")
-    dbgLab := label.new(bar_index, high, txt, style = label.style_label_left,
-         color = color.new(color.black, 20), textcolor = color.white,
-         size = size.small, force_overlay = true)

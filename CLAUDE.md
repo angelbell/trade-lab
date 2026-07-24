@@ -39,7 +39,7 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
       274.3本/日）。**gold m5 も `2018-10-01` 以降に切る**。BTC m5 はファイル自体が 2019-01-01 開始なので無関係。
     - **gold m1 は 2026-07-19 に橋(mt5-mcp)で 2019-2026 を再取得済み**（`data/vantage_xauusd_m1.csv`＝267万行・1分刻み。
       旧版は直近7か月200k行だけ＝輸出上限で切れていた、`*.bak_recent200k`）。**ブローカーのm1保持は2019年から**（2018はほぼ無し）。
-      **橋の銘柄名は現Demo口座では `XAUUSD`（`XAUUSD+` は旧口座の記述で今は存在しない）**。橋が `IPC send failed` を返す時は
+      **橋の銘柄名は現Demo口座では `XAUUSD+`（無印 `XAUUSD` は現端末に存在しない＝2026-07-23実測）。h1/m15/m5 の正典CSV `vantage_xauusd_*` は XAUUSD+ から本日まで再取得済み**（旧XAUUSDと +$0.05 の一定オフセットのみ・OHLCV無影響、疎な2007-2017は落ちて健全化、旧版 `.bak_pre_xauusdplus_20260723`）。**⚠️ XAUUSD+ は export が `vantage_xauusd+_*` と名付けるので、一時dirに取得→被り区間の価格一致を確認→正典名 `vantage_xauusd_*` に cp する**（縮小ガードは temp では効かないので手で検算）。橋が `IPC send failed` を返す時は
       端末未接続＝**8765を握る古いプロセスをkillして `bash ../mt5-mcp/scripts/run_bridge.sh` で立て直す**（PID特定は
       `powershell.exe -Command "(Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProcess"` → `taskkill.exe /F /PID`）。
   - 週足（2026-07-13 にブリッジで取得）: `vantage_{eurusd,usdjpy}_w1`(1971→)· `{gbpusd,audusd,nzdusd,usdcad}_w1`
@@ -71,7 +71,7 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
   stops slip in fast markets (model separately).
 - **Refresh OHLCV from MT5 (demo) via the `mt5-mcp` bridge** (sibling repo `../mt5-mcp`):
   `bash ../mt5-mcp/scripts/run_backtests.sh` = refresh + re-run the book (jobs in `config/runbook.yaml`).
-  Data-only: `../mt5-mcp/.venv/bin/python ../mt5-mcp/client/export_csv.py --symbol XAUUSD --tf h1`.
+  Data-only: `../mt5-mcp/.venv/bin/python ../mt5-mcp/client/export_csv.py --symbol XAUUSD+ --tf h1 --out-dir <tmp>` → 正典名 `vantage_xauusd_h1.csv` に cp（gold は `XAUUSD+`＝ファイル名に + が付くため一時取得してリネーム）.
   Requires the bridge up + MT5 terminal logged in. Shrink-guarded. auto-trade is invoked, never modified.
 
 ## The toolkit (reuse these; don't reinvent — copy-paste configs in `docs/toolkit_examples.md`)
