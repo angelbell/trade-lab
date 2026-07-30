@@ -1,0 +1,16 @@
+{
+  "name": "donchian20_sar_gold_4h",
+  "n_entries": 347,
+  "created": "2026-07-29T01:46:43+00:00",
+  "windows": {
+    "8323": {
+      "n": 347,
+      "mfe_median_pct": 1.1361954972704769,
+      "mfe_std_pct": 1.532090096578838,
+      "mae_median_pct": -1.135832476395254,
+      "mae_std_pct": 1.0628916776442228,
+      "ratio_median": 1.0003196077615026,
+      "verdict": "境界(1.0-1.2)"
+    }
+  }
+}

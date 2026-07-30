@@ -25,6 +25,11 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
 
 ## Environment / how to run
 - `python` is NOT on PATH. Always use `.venv/bin/python`.
+- 💸 **費用は往復回数に比例する（1往復＝全履歴の再送・実測で総費用の66%）。内容量ではなく回数。**
+  独立したコマンド・番人・確認は `&&` や `;` で **1回の Bash にまとめる**（番人は `bash invariants/check_all.sh`）。
+  使い捨て解析は即席ヒアドキュメントを繰り返さず**1本のスクリプトに束ねて1回で回す**。
+  `measure` への委任は **1実験＝1回**（往復の中で仕様→実装→実行→数字まで完結させる。小刻みな往復で使わない）。
+  ⚠️ ただし**照合・番人・falsify を削って往復を減らすのは禁止**（正確性が費用に優先する。減らすのは回数だけ）。
 - Data loader: `from src.data_loader import load_mt5_csv` (root scripts import directly;
   `research/` scripts already `sys.path.insert` the project root). Keeps MT5 broker-server
   time as the clock so HTF bins align. Auto-drops feed-glitch bars (stderr warning).
@@ -39,6 +44,9 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
       274.3本/日）。**gold m5 も `2018-10-01` 以降に切る**。BTC m5 はファイル自体が 2019-01-01 開始なので無関係。
     - **gold m1 は 2026-07-19 に橋(mt5-mcp)で 2019-2026 を再取得済み**（`data/vantage_xauusd_m1.csv`＝267万行・1分刻み。
       旧版は直近7か月200k行だけ＝輸出上限で切れていた、`*.bak_recent200k`）。**ブローカーのm1保持は2019年から**（2018はほぼ無し）。
+      **🚨 m1 だけ XAUUSD+ 移行前の取得なので h1/m15/m5 に対し価格が一定 −$0.05 ずれている**（2026-07-30 実測、
+      一致率±$0.01 が 11.6%→補正後 78.5%）。**M1 を約定順序の判定に使う時は毎回オフセットを実測して引く**
+      （未補正で「合格の形をした偽陽性」を出した実例あり＝`x_conventions#m1-feed-offset`）。恒久対処は XAUUSD+ から再取得。
       **橋の銘柄名は現Demo口座では `XAUUSD+`（無印 `XAUUSD` は現端末に存在しない＝2026-07-23実測）。h1/m15/m5 の正典CSV `vantage_xauusd_*` は XAUUSD+ から本日まで再取得済み**（旧XAUUSDと +$0.05 の一定オフセットのみ・OHLCV無影響、疎な2007-2017は落ちて健全化、旧版 `.bak_pre_xauusdplus_20260723`）。**⚠️ XAUUSD+ は export が `vantage_xauusd+_*` と名付けるので、一時dirに取得→被り区間の価格一致を確認→正典名 `vantage_xauusd_*` に cp する**（縮小ガードは temp では効かないので手で検算）。橋が `IPC send failed` を返す時は
       端末未接続＝**8765を握る古いプロセスをkillして `bash ../mt5-mcp/scripts/run_bridge.sh` で立て直す**（PID特定は
       `powershell.exe -Command "(Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProcess"` → `taskkill.exe /F /PID`）。
@@ -79,7 +87,7 @@ hypothesis, not a result. Never cheerlead a number — stress it first.
 |---|---|
 | `breakout_wave.py` | Elliott Pattern-A/B breakout（gold_bo/btc_bo の本体；--pullback-frac, --retest 等） |
 | `ema_pullback.py` | EMA pullback-continuation（btc_pull の本体；--gate-tf 系でサイクルゲート） |
-| `src/engine/` | 分解エンジン（gates/detect/plan/**walk**/stats/**size**/**arbiter**/**walk_ict**/mirror、2026-07-17）。**執行ウォーカーは walk.py（breakout系＋walk_ema）と walk_ict.py（ICT系: ASK基準指値・キルゾーン・NY壁時計）、サイズ写像は size.py、同DD裁定は arbiter.py だけ**＝各層の修正は1箇所。旧 run() は薄い委譲ラッパー、旧 `experiments/arb_common.py`・`ict_exec.py` は転送シム（呼び出し側は無変更）。**engine を編集したら番人3本の全PASSが必須**: `invariants/engine_tieback.py`（41構成）・`engine_golden.py check-run`・`size_tieback.py`（ICT系はアブレーション出力のバイト一致で照合済み）。新規スクリプトの自前ウォーカー/サイズ写像/裁定器の実装は禁止＝ここから import |
+| `src/engine/` | 分解エンジン（gates/detect/plan/**walk**/stats/**size**/**arbiter**/**walk_ict**/mirror、2026-07-17）。**執行ウォーカーは walk.py（breakout系＋walk_ema）と walk_ict.py（ICT系: ASK基準指値・キルゾーン・NY壁時計）、サイズ写像は size.py、同DD裁定は arbiter.py だけ**＝各層の修正は1箇所。旧 run() は薄い委譲ラッパー、旧 `experiments/arb_common.py`・`ict_exec.py` は転送シム（呼び出し側は無変更）。**engine を編集したら番人3本の全PASSが必須**: `invariants/engine_tieback.py`（41構成）・`engine_golden.py check-run`・`size_tieback.py`（ICT系はアブレーション出力のバイト一致で照合済み）。**呼び出しは `bash invariants/check_all.sh engine`（構成側は `book`、既定 `all`）＝4本を1往復で回し要約1行ずつ＋全文は `scratchpad/out_*.txt`**。新規スクリプトの自前ウォーカー/サイズ写像/裁定器の実装は禁止＝ここから import |
 | `mfe_mae.py` | generic entry-edge SCREEN (MFE/MAE ratio)：<1.0 dead, >1.2 worth deeper test |
 | `research/edge_harness.py` | **標準evalハーネス — 新signalは必ずこれに通す**（PF/N/リスク/TFラダー/ベータnull/先読み禁止をコードで強制） |
 | `research/scalp_lab.py` | anti-overfit intraday harness (orb/squeeze/bounce; IS/VAL/sealed TEST) |

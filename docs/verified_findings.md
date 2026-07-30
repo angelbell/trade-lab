@@ -70,6 +70,9 @@
 - ❌🔑 gold15m の選別フィルタ(寄り付き/レンジ収縮/広レンジ拡張/セッション既進距離)4方向とも非改良＝勝率上げる選別軸なし。既進距離は仮説と逆でアジア発が最良、24%はRR4設計値。(2026-07-23, m_breakout#gold15m-selection-filters)
 - ❌🔑 range/ATR14・ER×実体をフィルタでなく裁量サイズ勾配(0.01ロット刻み)で試しても gold15m は非改良＝両軸とも非単調(尖り)・null圏内・同maxDD比較で固定ベットに負ける(−1.75〜−24.7pt)。単一バー特徴は打ち止め、次は複合スコアcombo2。(2026-07-24, m_breakout#gold15m-strength-sizing)
 - ✅🔑 gold15mのRR/利確18種を全数検定＝fixed-RR4を上回る出口なし(法則4/9/9b再確認)。同maxDD裁定でRR4>RR3/RR2.5(+6pt)・RR4×0.5倍>RR3×1.0倍(+3.22pt)＝「RR4が悪い」不支持。楽さは部分利確near2.5/far5.0(勝率24→37%・連敗16→8をほぼ無料-0.10pt)、建値ストップは勝率も連敗も悪化。(2026-07-24, m_breakout#gold15m-rr-exit-sweep)
+- ❌🔑 Donchian(20) gold 単体は不採用＝同DDで 1H+SMA150 と 4H無ゲートが同点(複利14.8%)・gold_bo と同族。4Hは損切り$が1Hの2.2倍・スワップ未計上・2025年だけで全利益の42%。(2026-07-30, m_breakout#donchian20-gold-standalone)
+- ❌🔑🚨 gold のブレイク後の押し目指値は改善にならない＝戻りが逆選択(勝ち0.348 vs 負け0.651・相関−0.327)。届く確率は59%(1本)/80%(10本)と十分あるが、深くするほど単調悪化。(2026-07-30, m_breakout#breakout-retrace-adverse-selection)
+- ❌🔑 「上に抵抗が多いと失敗しやすい」は gold では不成立＝逆U字。スイング高値本数は0本(最高値圏)が最悪、期間高値の数の頂点は1H=2本/4H=1本でずれる。PDH族=BTC専用と整合。(2026-07-30, m_breakout#overhead-level-count-gold)
 
 ## M2. 押し目・プルバック継続  →本文: findings/m_pullback.md
 - 🟡 VALIDATED CANDIDATE: gold 15分ブレイク（Pattern B / ZigZag k2 / 日足SMA150+slope / ext-cap8 / RR4）に「損切りL2・利確RR4固定・エントリーだけ押し目指値」 (2026-07-01)
@@ -84,6 +87,9 @@
 - ❌ 押しの深さ別の反発率カーブ（gold/BTC 15m、ライン有無×深さ帯の明示印字）＝ほぼ平ら・深端だけ弱く負 (2026-07-04)
 
 - ❌🔑 gold ラウンド数($50/$100=高OIストライク代理)は反応水準として≒0＝EV(率×大きさ)で測っても対照を超えず・null 8-9位相で最下位級・mfe_mae≒1.0。「水準は通過される」をEV物差しで再確認。用途は入口でなく目標(ドロー)側。(2026-07-23, m_bounce#round-number-levels-gold)
+- ❌🔑 gold「4Hゲート×1H EMA帯押し目」フラクタル反発=死。L/Sともnull超えず(pct72.9/74.5)・ゲート不活性(gated MFE≈ungated≈2.1ATR)・$10到達は共に≈49%=コイン投げ。4H文脈は反発を選ばない。(2026-07-24, m_bounce#fractal-pullback-gold)
+- ❌🔑 同・EMA長18-23掃引は平坦=ユーザー予測「21/22>20」不支持・自己相似でない(lift がscale間不一致・符号反転、生存はフラクタル設計外の粒度比較に偏在)。(2026-07-24, m_bounce#fractal-pullback-gold)
+- ❌🔑 その「唯一残った筋」(1H自己ゲートSHORT)も battery でKILL。負歪度機構の転移が falsify=USDJPY(skew−0.64)はLONG>SHORTと真逆・一致2/4=gold固有の多重比較産物。緩null-aに0/18・OOS境界。(2026-07-24, m_bounce#selfgate-short-battery)
 
 ## M4. フェード／逆張り・スイープ  →本文: findings/m_fade.md
 - ❌ 単体トリガーのフェード（RSI70/80・BB2σ・extMA2ATR・連続足）＝H1で無エッジ
@@ -412,3 +418,5 @@
 - 🚨🔑 「強い」の定義は【実体>2.0ATR かつ ER高】の積でなければならない。ERだけは45%（無）、実体だけは26%でブロックを長くするほど悪化＝有害。「大きい拡大足ほど良い」は誤り。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
 - 📁 確定形のPine: `pine/btc_1h_spike_rider.pine`（BTC 1H ロング専用・k1.5・実体2.0ATRかつ効率比が中央値以上のとき0.02/他0.01・ATR×3トレール・fwd20・診断パネルつき）。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
 - 🔧 効率比の中央値は【移動窓】でよい（Pine で拡張窓は重すぎる）。窓250-8000本が台地で、むしろ拡張窓より良い（Binance +7%→+19%）。既定は500本。照合は `experiments/atr_spike_er_funnel.py`。(2026-07-22, m_breakout#atr-spike-body-x-er-size)
+- 🚨🔑🔬 【データ罠】vantage_xauusd_m1 は h1/m15/m5 に対し一定 −$0.05 ずれる(m1だけ旧XAUUSD取得)。一致率±$0.01が11.6%→78.5%。未補正で偽陽性が出た。M1使用時は毎回実測して引く。(2026-07-30, x_conventions#m1-feed-offset)
+- 🔬🔑🚨 【規約】ブレイク後の指値は約定足の順序をM5/M1で解かないと判定不能＝楽観だと年率/DD 0.798→3.4(約定の95%が信号足)。取れる上限は *_after_strict、*_after は原理的に不可。(2026-07-30, x_conventions#intrabar-order-limit-fill)
